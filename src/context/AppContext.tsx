@@ -270,22 +270,30 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
   const checkApiHealth = async (): Promise<ApiHealthStatus> => {
     setApiHealth((prev) => ({ ...prev, status: 'checking', message: 'Verifying API status...' }));
     try {
-      const headers: Record<string, string> = {};
       const candidateKey =
         (settings.useCustomKey && settings.customGeminiKey ? settings.customGeminiKey : '') ||
         getActiveApiKey();
-      if (candidateKey) {
-        headers['x-gemini-key'] = candidateKey;
+      if (!candidateKey) {
+        const missingObj: ApiHealthStatus = {
+          status: 'missing_key',
+          healthy: false,
+          latencyMs: 0,
+          message: 'Ready for your Gemini API Key in Key Vault',
+          quotaIndicator: 'normal',
+          lastChecked: new Date().toLocaleTimeString(),
+        };
+        setApiHealth(missingObj);
+        return missingObj;
       }
-      const res = await fetch('/api/academic/health', { headers });
-      const data = await res.json().catch(() => ({}));
+      const res = await testGeminiApiKey(candidateKey);
+      const isQuota = res.message.includes('429') || res.message.toLowerCase().includes('quota');
       const statusObj: ApiHealthStatus = {
-        status: data.status || (data.healthy ? 'healthy' : 'error'),
-        healthy: Boolean(data.healthy),
-        latencyMs: data.latencyMs || 0,
-        model: data.model,
-        message: data.message || 'Status verified',
-        quotaIndicator: data.quotaIndicator || (data.healthy ? 'optimal' : 'low'),
+        status: res.success ? 'healthy' : isQuota ? 'quota_exceeded' : 'error',
+        healthy: res.success,
+        latencyMs: res.latency || 0,
+        model: 'gemini-2.5-flash',
+        message: res.message,
+        quotaIndicator: res.success ? 'optimal' : 'low',
         lastChecked: new Date().toLocaleTimeString(),
       };
       setApiHealth(statusObj);
@@ -295,7 +303,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
         status: 'error',
         healthy: false,
         latencyMs: 0,
-        message: 'Cannot reach server health endpoint',
+        message: 'Network connection error - Ensure VPN is active and stable',
         quotaIndicator: 'low',
         lastChecked: new Date().toLocaleTimeString(),
       };

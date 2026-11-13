@@ -17,11 +17,22 @@ import {
   STORAGE_KEY_BACKUP,
   cleanGeminiKey,
   testGeminiApiKey,
+  validateGeminiApiKey,
+  isAIStudioPreview,
+  isValidGeminiKeyFormat,
+  generateGeminiResponse,
   silentValidateStoredKeys,
   invalidateDynamicModelCatalog,
 } from '../services/geminiService';
 
-export { cleanGeminiKey, testGeminiApiKey };
+export {
+  cleanGeminiKey,
+  testGeminiApiKey,
+  validateGeminiApiKey,
+  isAIStudioPreview,
+  isValidGeminiKeyFormat,
+  generateGeminiResponse,
+};
 
 const PRIMARY_KEY_STORAGE = STORAGE_KEY_PRIMARY;
 const BACKUP_KEY_STORAGE = STORAGE_KEY_BACKUP;

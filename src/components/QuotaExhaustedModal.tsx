@@ -48,7 +48,7 @@ export const QuotaExhaustedModal: React.FC<QuotaExhaustedModalProps> = ({ onOpen
     try {
       const res = await testGeminiApiKey(newKeyValue);
       if (res.success) {
-        setSuccessToast(`✅ API Key မှန်ကန်ပြီး တိုက်ရိုက်အသုံးပြုနိုင်ပါသည် (${res.latency}ms)`);
+        setSuccessToast(`✅ ${res.message}`);
       } else {
         setKeyError(`❌ ${res.message}`);
       }
@@ -61,7 +61,7 @@ export const QuotaExhaustedModal: React.FC<QuotaExhaustedModalProps> = ({ onOpen
     e.preventDefault();
     const cleanKey = cleanGeminiKey(newKeyValue);
     if (!cleanKey || cleanKey.length < 8) {
-      setKeyError('Key မပြည့်စုံပါ။ ကျေးဇူးပြု၍ စာလုံးအပြည့်အစုံ ကူးထည့်ပေးပါ။');
+      setKeyError('Invalid API Key format [400]');
       return;
     }
 
@@ -74,7 +74,7 @@ export const QuotaExhaustedModal: React.FC<QuotaExhaustedModalProps> = ({ onOpen
         return;
       }
 
-      setSuccessToast(`✅ API Key မှန်ကန်ပြီး တိုက်ရိုက်အသုံးပြုနိုင်ပါသည် (${testRes.latency}ms)`);
+      setSuccessToast(`✅ ${testRes.message}`);
 
       if (targetSlot === 'primary') {
         localStorage.setItem('akari_gemini_api_key_primary', cleanKey);
@@ -94,7 +94,7 @@ export const QuotaExhaustedModal: React.FC<QuotaExhaustedModalProps> = ({ onOpen
         setSuccessToast(null);
       }, 900);
     } catch (err: any) {
-      setKeyError(err?.message || '❌ Google မှ ဤ API Key ကို လက်မခံပါ။');
+      setKeyError(err?.message || '❌ Invalid API Key format [400]');
     } finally {
       setIsVerifying(false);
     }

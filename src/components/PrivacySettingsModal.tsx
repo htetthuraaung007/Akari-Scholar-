@@ -21,7 +21,12 @@ import {
   RefreshCw,
   FlaskConical,
 } from 'lucide-react';
-import { useApi, cleanGeminiKey, testGeminiApiKey } from '../context/ApiContext';
+import {
+  useApi,
+  cleanGeminiKey,
+  testGeminiApiKey,
+  isValidGeminiKeyFormat,
+} from '../context/ApiContext';
 import { SystemSettingsHub } from './SystemSettingsHub';
 
 interface PrivacyModalProps {
@@ -99,25 +104,26 @@ export const PrivacySettingsModal: React.FC<PrivacyModalProps> = ({ isOpen, onCl
 
   // Test Primary Key against Google Gemini API directly
   const handleTestPrimaryKey = async () => {
-    const cleanKey = cleanGeminiKey(geminiKeyInput);
-    if (!cleanKey) return;
+    const trimmedKey = cleanGeminiKey(geminiKeyInput.trim());
+    if (!trimmedKey) return;
     setIsTestingPrimary(true);
     setPrimaryTestResult(null);
     setGeminiSaveFeedback(null);
     try {
-      const result = await testGeminiApiKey(cleanKey);
+      const result = await testGeminiApiKey(trimmedKey);
       setPrimaryTestResult(result);
       if (result.success) {
         if (result.latency !== undefined) {
           setPrimarySavedLatency(result.latency);
         }
-        // Automatically persist & activate when test succeeds
-        localStorage.setItem('akari_gemini_api_key_primary', cleanKey);
-        localStorage.setItem('akari_primary_gemini_key', cleanKey);
-        localStorage.setItem('gemini_api_key', cleanKey);
-        localStorage.setItem(`key_status_${cleanKey.slice(-6)}`, 'active');
-        setPrimaryApiKey(cleanKey);
-        updateSettings({ customGeminiKey: cleanKey, useCustomKey: true });
+        // Upon HTTP 200 or valid preview format check, save key into localStorage and update active global state
+        localStorage.setItem('akari_gemini_api_key_primary', trimmedKey);
+        localStorage.setItem('akari_primary_gemini_key', trimmedKey);
+        localStorage.setItem('gemini_api_key', trimmedKey);
+        localStorage.setItem(`key_status_${trimmedKey.slice(-6)}`, 'active');
+        setPrimaryApiKey(trimmedKey);
+        updateSettings({ customGeminiKey: trimmedKey, useCustomKey: true });
+        setGeminiSaveFeedback(`✅ ${result.message}`);
         void checkApiHealth();
       }
     } finally {
@@ -125,27 +131,29 @@ export const PrivacySettingsModal: React.FC<PrivacyModalProps> = ({ isOpen, onCl
     }
   };
 
-  // Save & Activate Primary Key immediately
+  // Save & Activate Primary Key: Trim -> Run direct Google REST test -> Save on success -> Show green notification
   const handleSaveGeminiKey = async () => {
-    const cleanKey = cleanGeminiKey(geminiKeyInput);
-    if (cleanKey) {
-      localStorage.setItem('akari_gemini_api_key_primary', cleanKey);
-      localStorage.setItem('akari_primary_gemini_key', cleanKey);
-      localStorage.setItem('gemini_api_key', cleanKey);
-      localStorage.setItem(`key_status_${cleanKey.slice(-6)}`, 'active');
-      setPrimaryApiKey(cleanKey);
-      updateSettings({ customGeminiKey: cleanKey, useCustomKey: true });
-      setGeminiSaveFeedback('✅ Primary Gemini API Key Activated & Saved!');
-
-      // Verify connectivity directly against Google Gemini API
+    const trimmedKey = cleanGeminiKey(geminiKeyInput.trim());
+    if (trimmedKey) {
       setIsTestingPrimary(true);
+      setPrimaryTestResult(null);
+      setGeminiSaveFeedback(null);
       try {
-        const result = await testGeminiApiKey(cleanKey);
+        const result = await testGeminiApiKey(trimmedKey);
         setPrimaryTestResult(result);
-        if (result.success && result.latency !== undefined) {
-          setPrimarySavedLatency(result.latency);
+        if (result.success) {
+          if (result.latency !== undefined) {
+            setPrimarySavedLatency(result.latency);
+          }
+          localStorage.setItem('akari_gemini_api_key_primary', trimmedKey);
+          localStorage.setItem('akari_primary_gemini_key', trimmedKey);
+          localStorage.setItem('gemini_api_key', trimmedKey);
+          localStorage.setItem(`key_status_${trimmedKey.slice(-6)}`, 'active');
+          setPrimaryApiKey(trimmedKey);
+          updateSettings({ customGeminiKey: trimmedKey, useCustomKey: true });
+          setGeminiSaveFeedback(`✅ ${result.message}`);
+          void checkApiHealth();
         }
-        void checkApiHealth();
       } finally {
         setIsTestingPrimary(false);
       }
@@ -157,7 +165,7 @@ export const PrivacySettingsModal: React.FC<PrivacyModalProps> = ({ isOpen, onCl
       setPrimaryTestResult(null);
       setGeminiSaveFeedback('Primary key cleared');
     }
-    setTimeout(() => setGeminiSaveFeedback(null), 3500);
+    setTimeout(() => setGeminiSaveFeedback(null), 4000);
   };
 
   const handleRemoveGeminiKey = () => {
@@ -175,44 +183,48 @@ export const PrivacySettingsModal: React.FC<PrivacyModalProps> = ({ isOpen, onCl
 
   // Test Backup Key against Google Gemini API directly
   const handleTestBackupKey = async () => {
-    const cleanKey = cleanGeminiKey(backupKeyInput);
-    if (!cleanKey) return;
+    const trimmedKey = cleanGeminiKey(backupKeyInput.trim());
+    if (!trimmedKey) return;
     setIsTestingBackup(true);
     setBackupTestResult(null);
     setBackupSaveFeedback(null);
     try {
-      const result = await testGeminiApiKey(cleanKey);
+      const result = await testGeminiApiKey(trimmedKey);
       setBackupTestResult(result);
       if (result.success) {
         if (result.latency !== undefined) {
           setBackupSavedLatency(result.latency);
         }
-        localStorage.setItem('akari_gemini_api_key_backup', cleanKey);
-        localStorage.setItem('akari_backup_gemini_key', cleanKey);
-        localStorage.setItem(`key_status_${cleanKey.slice(-6)}`, 'active');
-        setBackupApiKey(cleanKey);
+        localStorage.setItem('akari_gemini_api_key_backup', trimmedKey);
+        localStorage.setItem('akari_backup_gemini_key', trimmedKey);
+        localStorage.setItem(`key_status_${trimmedKey.slice(-6)}`, 'active');
+        setBackupApiKey(trimmedKey);
+        setBackupSaveFeedback(`✅ ${result.message}`);
       }
     } finally {
       setIsTestingBackup(false);
     }
   };
 
-  // Save & Activate Backup Key immediately
+  // Save & Activate Backup Key: Trim -> Run direct Google REST test -> Save on success -> Show green notification
   const handleSaveBackupKey = async () => {
-    const cleanKey = cleanGeminiKey(backupKeyInput);
-    if (cleanKey) {
-      localStorage.setItem('akari_gemini_api_key_backup', cleanKey);
-      localStorage.setItem('akari_backup_gemini_key', cleanKey);
-      localStorage.setItem(`key_status_${cleanKey.slice(-6)}`, 'active');
-      setBackupApiKey(cleanKey);
-      setBackupSaveFeedback('✅ Secondary Backup Key Activated & Saved!');
-
+    const trimmedKey = cleanGeminiKey(backupKeyInput.trim());
+    if (trimmedKey) {
       setIsTestingBackup(true);
+      setBackupTestResult(null);
+      setBackupSaveFeedback(null);
       try {
-        const result = await testGeminiApiKey(cleanKey);
+        const result = await testGeminiApiKey(trimmedKey);
         setBackupTestResult(result);
-        if (result.success && result.latency !== undefined) {
-          setBackupSavedLatency(result.latency);
+        if (result.success) {
+          if (result.latency !== undefined) {
+            setBackupSavedLatency(result.latency);
+          }
+          localStorage.setItem('akari_gemini_api_key_backup', trimmedKey);
+          localStorage.setItem('akari_backup_gemini_key', trimmedKey);
+          localStorage.setItem(`key_status_${trimmedKey.slice(-6)}`, 'active');
+          setBackupApiKey(trimmedKey);
+          setBackupSaveFeedback(`✅ ${result.message}`);
         }
       } finally {
         setIsTestingBackup(false);
@@ -224,7 +236,7 @@ export const PrivacySettingsModal: React.FC<PrivacyModalProps> = ({ isOpen, onCl
       setBackupTestResult(null);
       setBackupSaveFeedback('Backup key cleared');
     }
-    setTimeout(() => setBackupSaveFeedback(null), 3500);
+    setTimeout(() => setBackupSaveFeedback(null), 4000);
   };
 
   const handleRemoveBackupKey = () => {
@@ -377,8 +389,12 @@ export const PrivacySettingsModal: React.FC<PrivacyModalProps> = ({ isOpen, onCl
                 type="password"
                 value={geminiKeyInput}
                 onChange={(e) => {
-                  setGeminiKeyInput(e.target.value);
-                  setPrimaryTestResult(null);
+                  const val = e.target.value;
+                  setGeminiKeyInput(val);
+                  // Dismiss red error banner immediately when user edits or pastes a valid key format
+                  if (!primaryTestResult?.success || isValidGeminiKeyFormat(val)) {
+                    setPrimaryTestResult(null);
+                  }
                 }}
                 placeholder="Paste Gemini API Key (AQ... or AIza...)"
                 className="flex-1 px-3.5 py-2.5 text-xs bg-slate-950 border border-slate-700 rounded-xl text-white font-mono placeholder-slate-500 focus:outline-none focus:border-indigo-500"
@@ -482,8 +498,11 @@ export const PrivacySettingsModal: React.FC<PrivacyModalProps> = ({ isOpen, onCl
                 type="password"
                 value={backupKeyInput}
                 onChange={(e) => {
-                  setBackupKeyInput(e.target.value);
-                  setBackupTestResult(null);
+                  const val = e.target.value;
+                  setBackupKeyInput(val);
+                  if (!backupTestResult?.success || isValidGeminiKeyFormat(val)) {
+                    setBackupTestResult(null);
+                  }
                 }}
                 placeholder="Optional: Paste second Gmail Gemini Key (AQ... or AIza...)"
                 className="flex-1 px-3.5 py-2.5 text-xs bg-slate-950 border border-slate-700 rounded-xl text-white font-mono placeholder-slate-500 focus:outline-none focus:border-emerald-500"
