@@ -33,6 +33,7 @@ export const PrivacySettingsModal: React.FC<PrivacyModalProps> = ({ isOpen, onCl
   const {
     settings,
     updateSettings,
+    checkApiHealth,
     language,
     terms,
     flashcards,
@@ -57,8 +58,12 @@ export const PrivacySettingsModal: React.FC<PrivacyModalProps> = ({ isOpen, onCl
   const t = translations[language];
 
   const [useCustomKey] = useState(settings.useCustomKey);
-  const [geminiKeyInput, setGeminiKeyInput] = useState(primaryApiKey || settings.customGeminiKey || '');
-  const [backupKeyInput, setBackupKeyInput] = useState(backupApiKey || '');
+  const [geminiKeyInput, setGeminiKeyInput] = useState(
+    () => primaryApiKey || localStorage.getItem('akari_gemini_api_key_primary') || settings.customGeminiKey || ''
+  );
+  const [backupKeyInput, setBackupKeyInput] = useState(
+    () => backupApiKey || localStorage.getItem('akari_gemini_api_key_backup') || ''
+  );
 
   // Live API Key Test Suite State (Primary Key)
   const [isTestingPrimary, setIsTestingPrimary] = useState(false);
@@ -92,32 +97,58 @@ export const PrivacySettingsModal: React.FC<PrivacyModalProps> = ({ isOpen, onCl
 
   const fileInputRef = useRef<HTMLInputElement>(null);
 
-  // Test Primary Key against Google Gemini API
+  // Test Primary Key against Google Gemini API directly
   const handleTestPrimaryKey = async () => {
+    const cleanKey = cleanGeminiKey(geminiKeyInput);
+    if (!cleanKey) return;
     setIsTestingPrimary(true);
     setPrimaryTestResult(null);
     setGeminiSaveFeedback(null);
     try {
-      const result = await testGeminiApiKey(geminiKeyInput);
+      const result = await testGeminiApiKey(cleanKey);
       setPrimaryTestResult(result);
-      if (result.success && result.latency !== undefined) {
-        setPrimarySavedLatency(result.latency);
+      if (result.success) {
+        if (result.latency !== undefined) {
+          setPrimarySavedLatency(result.latency);
+        }
+        // Automatically persist & activate when test succeeds
+        localStorage.setItem('akari_gemini_api_key_primary', cleanKey);
+        localStorage.setItem('akari_primary_gemini_key', cleanKey);
+        localStorage.setItem('gemini_api_key', cleanKey);
+        localStorage.setItem(`key_status_${cleanKey.slice(-6)}`, 'active');
+        setPrimaryApiKey(cleanKey);
+        updateSettings({ customGeminiKey: cleanKey, useCustomKey: true });
+        void checkApiHealth();
       }
     } finally {
       setIsTestingPrimary(false);
     }
   };
 
-  // Save Primary Key
-  const handleSaveGeminiKey = () => {
+  // Save & Activate Primary Key immediately
+  const handleSaveGeminiKey = async () => {
     const cleanKey = cleanGeminiKey(geminiKeyInput);
     if (cleanKey) {
       localStorage.setItem('akari_gemini_api_key_primary', cleanKey);
       localStorage.setItem('akari_primary_gemini_key', cleanKey);
       localStorage.setItem('gemini_api_key', cleanKey);
+      localStorage.setItem(`key_status_${cleanKey.slice(-6)}`, 'active');
       setPrimaryApiKey(cleanKey);
       updateSettings({ customGeminiKey: cleanKey, useCustomKey: true });
       setGeminiSaveFeedback('✅ Primary Gemini API Key Activated & Saved!');
+
+      // Verify connectivity directly against Google Gemini API
+      setIsTestingPrimary(true);
+      try {
+        const result = await testGeminiApiKey(cleanKey);
+        setPrimaryTestResult(result);
+        if (result.success && result.latency !== undefined) {
+          setPrimarySavedLatency(result.latency);
+        }
+        void checkApiHealth();
+      } finally {
+        setIsTestingPrimary(false);
+      }
     } else {
       localStorage.removeItem('akari_gemini_api_key_primary');
       localStorage.removeItem('akari_primary_gemini_key');
@@ -137,34 +168,55 @@ export const PrivacySettingsModal: React.FC<PrivacyModalProps> = ({ isOpen, onCl
     localStorage.removeItem('akari_primary_gemini_key');
     localStorage.removeItem('gemini_api_key');
     setPrimaryApiKey('');
+    updateSettings({ customGeminiKey: '', useCustomKey: false });
     setGeminiSaveFeedback('Primary key removed');
     setTimeout(() => setGeminiSaveFeedback(null), 3000);
   };
 
-  // Test Backup Key against Google Gemini API
+  // Test Backup Key against Google Gemini API directly
   const handleTestBackupKey = async () => {
+    const cleanKey = cleanGeminiKey(backupKeyInput);
+    if (!cleanKey) return;
     setIsTestingBackup(true);
     setBackupTestResult(null);
     setBackupSaveFeedback(null);
     try {
-      const result = await testGeminiApiKey(backupKeyInput);
+      const result = await testGeminiApiKey(cleanKey);
       setBackupTestResult(result);
-      if (result.success && result.latency !== undefined) {
-        setBackupSavedLatency(result.latency);
+      if (result.success) {
+        if (result.latency !== undefined) {
+          setBackupSavedLatency(result.latency);
+        }
+        localStorage.setItem('akari_gemini_api_key_backup', cleanKey);
+        localStorage.setItem('akari_backup_gemini_key', cleanKey);
+        localStorage.setItem(`key_status_${cleanKey.slice(-6)}`, 'active');
+        setBackupApiKey(cleanKey);
       }
     } finally {
       setIsTestingBackup(false);
     }
   };
 
-  // Save Backup Key
-  const handleSaveBackupKey = () => {
+  // Save & Activate Backup Key immediately
+  const handleSaveBackupKey = async () => {
     const cleanKey = cleanGeminiKey(backupKeyInput);
     if (cleanKey) {
       localStorage.setItem('akari_gemini_api_key_backup', cleanKey);
       localStorage.setItem('akari_backup_gemini_key', cleanKey);
+      localStorage.setItem(`key_status_${cleanKey.slice(-6)}`, 'active');
       setBackupApiKey(cleanKey);
       setBackupSaveFeedback('✅ Secondary Backup Key Activated & Saved!');
+
+      setIsTestingBackup(true);
+      try {
+        const result = await testGeminiApiKey(cleanKey);
+        setBackupTestResult(result);
+        if (result.success && result.latency !== undefined) {
+          setBackupSavedLatency(result.latency);
+        }
+      } finally {
+        setIsTestingBackup(false);
+      }
     } else {
       localStorage.removeItem('akari_gemini_api_key_backup');
       localStorage.removeItem('akari_backup_gemini_key');

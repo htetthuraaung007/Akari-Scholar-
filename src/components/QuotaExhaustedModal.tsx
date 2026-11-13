@@ -60,7 +60,7 @@ export const QuotaExhaustedModal: React.FC<QuotaExhaustedModalProps> = ({ onOpen
   const handleVerifyAndSave = async (e: React.FormEvent) => {
     e.preventDefault();
     const cleanKey = cleanGeminiKey(newKeyValue);
-    if (!cleanKey || cleanKey.length < 20) {
+    if (!cleanKey || cleanKey.length < 8) {
       setKeyError('Key မပြည့်စုံပါ။ ကျေးဇူးပြု၍ စာလုံးအပြည့်အစုံ ကူးထည့်ပေးပါ။');
       return;
     }

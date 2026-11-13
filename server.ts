@@ -89,11 +89,22 @@ app.get('/api/academic/health', async (req: Request, res: Response): Promise<voi
 
   const startTime = Date.now();
   let lastErr: any = null;
-  const catalog = await discoverActiveServerModels(candidateKeys);
-  const probeModel = catalog.lightweight[0] || catalog.all[0];
+  const strictKeyHeader = req.headers['x-strict-key'] === '1';
+  const rawHeaderKey = (
+    (req.headers['x-gemini-key'] as string | undefined) ||
+    (req.headers['x-goog-api-key'] as string | undefined) ||
+    ''
+  )
+    .replace(/["'\s]/g, '')
+    .trim();
+  const keysToTest =
+    strictKeyHeader && rawHeaderKey.length >= 8 ? [rawHeaderKey] : candidateKeys;
+
+  const catalog = await discoverActiveServerModels(keysToTest);
+  const probeModel = catalog.lightweight[0] || catalog.all[0] || 'gemini-2.5-flash';
 
   if (probeModel) {
-    for (const apiKey of candidateKeys) {
+    for (const apiKey of keysToTest) {
       try {
         const ai = new GoogleGenAI({
           apiKey,
@@ -237,8 +248,6 @@ async function discoverActiveServerModels(candidateKeys: string[]): Promise<Serv
         if (
           lower.includes('1.0') ||
           lower.includes('1.5') ||
-          lower.includes('2.0') ||
-          lower.includes('2.5') ||
           lower.includes('omni') ||
           lower.includes('latest') ||
           lower.includes('exp') ||
@@ -292,9 +301,9 @@ async function discoverActiveServerModels(candidateKeys: string[]): Promise<Serv
 
   return (
     cachedServerModelCatalog || {
-      lightweight: [],
-      standard: [],
-      all: [],
+      lightweight: ['gemini-2.5-flash-lite'],
+      standard: ['gemini-2.5-flash', 'gemini-3-flash-preview'],
+      all: ['gemini-2.5-flash-lite', 'gemini-2.5-flash', 'gemini-3-flash-preview'],
       timestamp: 0,
     }
   );
@@ -1988,8 +1997,6 @@ Output ONLY the fully humanized, ready-to-use essay text ready to copy-paste. Do
       rawRequested !== 'auto' &&
       !lowerRequested.includes('1.0') &&
       !lowerRequested.includes('1.5') &&
-      !lowerRequested.includes('2.0') &&
-      !lowerRequested.includes('2.5') &&
       !lowerRequested.includes('omni') &&
       !lowerRequested.includes('latest') &&
       (dynamicCascade.length === 0 || dynamicCascade.includes(rawRequested));

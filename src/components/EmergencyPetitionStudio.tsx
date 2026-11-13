@@ -1,4 +1,5 @@
 import React, { useState } from 'react';
+import { executeAcademicActionWithCascade } from '../services/geminiService';
 
 interface PetitionFormData {
   category: string;
@@ -72,31 +73,16 @@ Instructor: ${formData.instructorName}
 Proposed Date: ${formData.proposedDate}
 Constraint: Keep it under 180 words, strictly formal academic tone, include Subject line.`;
 
-      const headers: Record<string, string> = { 'Content-Type': 'application/json' };
-      if (apiKey && apiKey.trim().length >= 10) {
-        headers['x-gemini-key'] = apiKey.trim();
-      }
-
-      const response = await fetch('/api/academic/assist', {
-        method: 'POST',
-        headers,
-        body: JSON.stringify({
-          action: 'direct_assist',
-          payload: {
-            prompt,
-            maxOutputTokens: 350
-          }
-        })
+      const aiText = await executeAcademicActionWithCascade({
+        action: 'direct_assist',
+        primaryKey: apiKey && apiKey.trim().length >= 10 ? apiKey.trim() : undefined,
+        payload: {
+          prompt,
+          maxOutputTokens: 350,
+        },
       });
 
-      if (!response.ok) {
-        generateLocalEmail();
-        return;
-      }
-
-      const data = await response.json();
-      const aiText = typeof data.result === 'string' ? data.result : '';
-      if (aiText && aiText.trim()) {
+      if (typeof aiText === 'string' && aiText.trim()) {
         setGeneratedEmail(aiText.trim());
       } else {
         generateLocalEmail();

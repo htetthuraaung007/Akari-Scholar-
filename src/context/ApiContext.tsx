@@ -18,6 +18,7 @@ import {
   cleanGeminiKey,
   testGeminiApiKey,
   silentValidateStoredKeys,
+  invalidateDynamicModelCatalog,
 } from '../services/geminiService';
 
 export { cleanGeminiKey, testGeminiApiKey };
@@ -164,10 +165,12 @@ export const ApiProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
   const setPrimaryApiKey = useCallback((key: string) => {
     const cleanKey = cleanGeminiKey(key);
     setPrimaryApiKeyState(cleanKey);
+    invalidateDynamicModelCatalog();
     if (cleanKey) {
       localStorage.setItem(PRIMARY_KEY_STORAGE, cleanKey);
       localStorage.setItem('akari_primary_gemini_key', cleanKey);
       localStorage.setItem('gemini_api_key', cleanKey);
+      localStorage.setItem(`key_status_${cleanKey.slice(-6)}`, 'active');
     } else {
       localStorage.removeItem(PRIMARY_KEY_STORAGE);
       localStorage.removeItem('akari_primary_gemini_key');
@@ -175,7 +178,7 @@ export const ApiProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     }
 
     setKeyPool((prev) => {
-      const withoutOld = prev.filter((k) => k.id !== 'primary-key-entry');
+      const withoutOld = prev.filter((k) => k.id !== 'primary-key-entry' && k.key !== cleanKey);
       if (cleanKey) {
         const updated = [
           {
@@ -199,16 +202,18 @@ export const ApiProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
   const setBackupApiKey = useCallback((key: string) => {
     const cleanKey = cleanGeminiKey(key);
     setBackupApiKeyState(cleanKey);
+    invalidateDynamicModelCatalog();
     if (cleanKey) {
       localStorage.setItem(BACKUP_KEY_STORAGE, cleanKey);
       localStorage.setItem('akari_backup_gemini_key', cleanKey);
+      localStorage.setItem(`key_status_${cleanKey.slice(-6)}`, 'active');
     } else {
       localStorage.removeItem(BACKUP_KEY_STORAGE);
       localStorage.removeItem('akari_backup_gemini_key');
     }
 
     setKeyPool((prev) => {
-      const withoutOld = prev.filter((k) => k.id !== 'backup-key-entry');
+      const withoutOld = prev.filter((k) => k.id !== 'backup-key-entry' && k.key !== cleanKey);
       if (cleanKey) {
         const updated = [
           ...withoutOld,
@@ -247,7 +252,7 @@ export const ApiProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
   // Add key with instant health probe verification
   const addKeyToPool = async (key: string, label?: string): Promise<QuotaHealthResult> => {
     const cleanKey = cleanGeminiKey(key);
-    if (!cleanKey || cleanKey.length < 20) {
+    if (!cleanKey || cleanKey.length < 8) {
       return {
         status: 'MISSING_KEY',
         healthy: false,

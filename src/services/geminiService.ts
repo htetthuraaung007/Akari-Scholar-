@@ -269,8 +269,6 @@ export function categorizeDiscoveredModels(rawModels: any[]): DynamicModelCatalo
     if (
       lower.includes('1.0') ||
       lower.includes('1.5') ||
-      lower.includes('2.0') ||
-      lower.includes('2.5') ||
       lower.includes('omni') ||
       lower.includes('latest') ||
       lower.includes('exp') ||
@@ -333,7 +331,7 @@ export function categorizeDiscoveredModels(rawModels: any[]): DynamicModelCatalo
 
 /**
  * Dynamic Verified Model Resolver (Silent & Instant):
- * Queries `GET https://generativelanguage.googleapis.com/v1beta/models?key=${activeKey}` ONCE,
+ * Queries `GET /api/academic/models` on the server ONCE,
  * filters strictly where `supportedGenerationMethods` includes `generateContent`,
  * sorts token-efficient models first and standard models second, and caches valid IDs in memory.
  */
@@ -344,7 +342,7 @@ export async function resolveDynamicModelCatalog(
   const candidateKeys = Array.from(
     new Set(
       [cleanGeminiKey(apiKey || ''), cleanGeminiKey(getActiveApiKey()), ...getAllAvailableKeys()].filter(
-        (k) => k.length >= 15
+        (k) => k.length >= 8
       )
     )
   );
@@ -368,53 +366,21 @@ export async function resolveDynamicModelCatalog(
       let rawList: any[] = [];
       let usedKeyFingerprint = expectedFingerprint;
 
-      // 1. Direct API-Driven Catalog Discovery across valid client keys (skip invalid 400/403 keys immediately)
-      for (const candidateKey of candidateKeys) {
-        try {
-          const directRes = await fetch(
-            `https://generativelanguage.googleapis.com/v1beta/models?key=${encodeURIComponent(candidateKey)}`,
-            { method: 'GET' }
-          );
-          if (directRes.status === 400 || directRes.status === 401 || directRes.status === 403) {
-            if (typeof window !== 'undefined') {
-              try {
-                localStorage.setItem(`key_status_${candidateKey.slice(-6)}`, 'invalid');
-              } catch {}
-            }
-            continue;
-          }
-          if (directRes.ok) {
-            const directData = await directRes.json();
-            if (Array.isArray(directData?.models) && directData.models.length > 0) {
-              rawList = directData.models;
-              usedKeyFingerprint = candidateKey.slice(-6);
-              break;
-            }
-          }
-        } catch {
-          // Network or CORS issue; try server proxy fallback
-          break;
-        }
+      const fallbackKey = candidateKeys[0] || '';
+      const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+      if (fallbackKey) {
+        headers['x-gemini-key'] = fallbackKey;
+        headers['x-goog-api-key'] = fallbackKey;
       }
 
-      // 2. Server-backed discovery fallback (supports server environment key)
-      if (rawList.length === 0) {
-        const fallbackKey = candidateKeys[0] || '';
-        const headers: Record<string, string> = { 'Content-Type': 'application/json' };
-        if (fallbackKey) {
-          headers['x-gemini-key'] = fallbackKey;
-          headers['x-goog-api-key'] = fallbackKey;
-        }
+      const res = await fetch('/api/academic/models', {
+        method: 'GET',
+        headers,
+      });
 
-        const res = await fetch('/api/academic/models', {
-          method: 'GET',
-          headers,
-        });
-
-        if (res.ok) {
-          const data = await res.json();
-          rawList = Array.isArray(data?.models) ? data.models : [];
-        }
+      if (res.ok) {
+        const data = await res.json();
+        rawList = Array.isArray(data?.models) ? data.models : [];
       }
 
       if (rawList.length > 0) {
@@ -468,13 +434,15 @@ export function getAllAvailableKeys(): string[] {
 
   const pushUnique = (raw?: string | null) => {
     const cleaned = cleanGeminiKey(raw || '');
-    if (cleaned && cleaned.length >= 15 && !keys.includes(cleaned)) {
+    if (cleaned && cleaned.length >= 8 && !keys.includes(cleaned)) {
       keys.push(cleaned);
     }
   };
 
   pushUnique(localStorage.getItem(STORAGE_KEY_PRIMARY));
   pushUnique(localStorage.getItem('akari_primary_gemini_key'));
+  pushUnique(localStorage.getItem('akari_custom_gemini_key'));
+  pushUnique(localStorage.getItem('akari_gemini_api_key'));
   pushUnique(localStorage.getItem('gemini_api_key'));
   pushUnique(localStorage.getItem(STORAGE_KEY_BACKUP));
   pushUnique(localStorage.getItem('akari_backup_gemini_key'));
@@ -572,8 +540,8 @@ export function getModelCascade(complexity: TaskComplexity = 'standard'): string
       ? [...standardTier, ...lightTier, ...heavyTier]
       : [...standardTier, ...heavyTier, ...lightTier];
 
-  const unique = Array.from(new Set(ordered));
-  return unique.length > 0 ? unique : ['auto'];
+  const unique = Array.from(new Set(ordered)).filter((m) => m && m !== 'auto');
+  return unique.length > 0 ? unique : ['gemini-2.5-flash', 'gemini-2.5-flash-lite'];
 }
 
 /**
@@ -659,7 +627,6 @@ export function getActiveApiKey(): string {
 
 /**
  * SDK Call Validation Guard
- * Universal Format Acceptance: Non-empty string with length >= 15
  */
 export function validateApiKey(apiKey?: string): string {
   const keyToTest = cleanGeminiKey(apiKey || getActiveApiKey());
@@ -668,20 +635,21 @@ export function validateApiKey(apiKey?: string): string {
 
 /**
  * In-App Live API Key Test Suite
- * Executes a zero-cost, ultra-lightweight ping to the Google Gemini API.
+ * Validates via server proxy endpoint /api/academic/health.
  */
 export async function testGeminiApiKey(
   key: string
 ): Promise<{ success: boolean; message: string; latency?: number }> {
-  const cleanKey = cleanGeminiKey(key);
+  const cleanKey = cleanGeminiKey(key || getActiveApiKey());
   const startTime = performance.now();
   try {
     const headers: Record<string, string> = {
       'Content-Type': 'application/json',
     };
-    if (cleanKey && cleanKey.length >= 15) {
+    if (cleanKey && cleanKey.length >= 8) {
       headers['x-gemini-key'] = cleanKey;
       headers['x-goog-api-key'] = cleanKey;
+      headers['x-strict-key'] = '1';
     }
     const res = await fetch('/api/academic/health', {
       method: 'GET',
@@ -690,20 +658,27 @@ export async function testGeminiApiKey(
     const latency = Math.round(performance.now() - startTime);
     const data = await res.json().catch(() => null);
     if (res.ok && data?.healthy) {
+      if (cleanKey && typeof window !== 'undefined') {
+        try {
+          localStorage.setItem(`key_status_${cleanKey.slice(-6)}`, 'active');
+        } catch {}
+      }
+      void resolveDynamicModelCatalog(cleanKey, true);
       return {
         success: true,
-        message: `API ချိတ်ဆက်မှု အောင်မြင်ပါသည် (${data.latencyMs || latency}ms)။ Key အသုံးပြုနိုင်ပါပြီ။`,
+        message: `API ချိတ်ဆက်မှု အောင်မြင်ပါသည် (${data.latencyMs || latency}ms) — Valid & Active [HTTP 200]`,
         latency: data.latencyMs || latency,
       };
     }
     return {
       success: false,
-      message: data?.message || 'API Key validation failed.',
+      message: data?.message || `HTTP ${res.status}: API Key validation failed.`,
+      latency,
     };
   } catch (e: any) {
     return {
       success: false,
-      message: `Network ချိတ်ဆက်မှု စစ်ဆေးပါ: ${e.message}`,
+      message: `Network Error: ${e?.message || 'Unable to reach server health endpoint'}`,
     };
   }
 }
@@ -1600,7 +1575,7 @@ export async function executeAcademicActionWithCascade(options: DispatchOptions)
 
   const appendKey = (raw: string | undefined, label: string) => {
     const cleaned = cleanGeminiKey(raw || '');
-    if (cleaned && cleaned.length >= 15 && !seenKeys.has(cleaned)) {
+    if (cleaned && cleaned.length >= 8 && !seenKeys.has(cleaned)) {
       seenKeys.add(cleaned);
       keyOrder.push({ key: cleaned, label });
     }
@@ -1612,10 +1587,10 @@ export async function executeAcademicActionWithCascade(options: DispatchOptions)
     appendKey(k, idx === 0 ? 'Primary Account Key' : idx === 1 ? 'Backup Account Key' : `Pool Account ${idx}`);
   });
 
-  // Final fallback to server environment key
+  // Final fallback to server environment key so the app works for everyone who opens it
   keyOrder.push({ key: '', label: 'Server Environment Key' });
 
-  // Resolve verified generateContent models once from Google API / memory cache
+  // Resolve verified generateContent models once from server API / memory cache
   await resolveDynamicModelCatalog(keyOrder[0]?.key || '');
 
   const resolvedComplexity = explicitComplexity || inferTaskComplexity(action, payload);
@@ -1662,7 +1637,6 @@ export async function executeAcademicActionWithCascade(options: DispatchOptions)
 
     if (keyIdx > 0 && cleanKey) {
       await new Promise((r) => setTimeout(r, 300));
-      // Refresh catalog if rotating to a new key and no verified models remain
       if (modelChain.filter((m) => !sessionDeadModels.has(m)).length === 0) {
         const refreshed = await resolveDynamicModelCatalog(cleanKey, true);
         if (refreshed.all.length > 0) {
@@ -1674,7 +1648,7 @@ export async function executeAcademicActionWithCascade(options: DispatchOptions)
     const activeChain = modelChain.filter((m) => !sessionDeadModels.has(m));
     const effectiveChain = activeChain.length > 0 ? activeChain : ['auto'];
 
-    // LAYER 1 (MODEL CASCADE): Iterate across verified generateContent models under the active key
+    // LAYER 1 (MODEL CASCADE): Iterate across verified generateContent models via server proxy
     for (let modelIdx = 0; modelIdx < effectiveChain.length; modelIdx++) {
       if (signal?.aborted) {
         throw new DOMException('Request aborted', 'AbortError');
@@ -1727,20 +1701,19 @@ export async function executeAcademicActionWithCascade(options: DispatchOptions)
             parsedData?.message ||
             (rawText.trim().startsWith('<') ? 'Service busy' : rawText) ||
             `HTTP ${response.status}`;
+          const msgStr = typeof rawMsg === 'string' ? rawMsg : JSON.stringify(rawMsg);
 
           const isInvalidKey =
-            response.status === 400 ||
             response.status === 401 ||
             response.status === 403 ||
             parsedData?.status === 'api_key_invalid' ||
-            rawMsg.includes('API key not valid') ||
-            rawMsg.includes('API_KEY_INVALID') ||
-            rawMsg.includes('INVALID_ARGUMENT') ||
-            rawMsg.includes('PERMISSION_DENIED') ||
-            rawMsg.includes('missing_key');
+            msgStr.includes('API key not valid') ||
+            msgStr.includes('API_KEY_INVALID') ||
+            msgStr.includes('PERMISSION_DENIED') ||
+            msgStr.includes('missing_key');
 
           if (isInvalidKey) {
-            finalError = new Error(rawMsg);
+            finalError = new Error(msgStr);
             if (response.status === 401 || response.status === 403) {
               authErrorCycleCount++;
             }
@@ -1749,7 +1722,6 @@ export async function executeAcademicActionWithCascade(options: DispatchOptions)
                 localStorage.setItem(`key_status_${cleanKey.slice(-6)}`, 'invalid');
               } catch {}
             }
-            // Invalid key: skip all remaining models for this key immediately and rotate
             if (keyIdx < keyOrder.length - 1) {
               break;
             }
@@ -1774,18 +1746,18 @@ export async function executeAcademicActionWithCascade(options: DispatchOptions)
             parsedData?.status === 'quota_exhausted' ||
             parsedData?.status === 'deadline_exceeded' ||
             parsedData?.status === 'model_unavailable' ||
-            rawMsg.includes('429') ||
-            rawMsg.includes('503') ||
-            rawMsg.includes('504') ||
-            rawMsg.includes('DEADLINE_EXCEEDED') ||
-            rawMsg.toLowerCase().includes('timeout') ||
-            rawMsg.toLowerCase().includes('timed out') ||
-            rawMsg.includes('RESOURCE_EXHAUSTED') ||
-            rawMsg.includes('quota') ||
-            rawMsg.includes('overloaded');
+            msgStr.includes('429') ||
+            msgStr.includes('503') ||
+            msgStr.includes('504') ||
+            msgStr.includes('DEADLINE_EXCEEDED') ||
+            msgStr.toLowerCase().includes('timeout') ||
+            msgStr.toLowerCase().includes('timed out') ||
+            msgStr.includes('RESOURCE_EXHAUSTED') ||
+            msgStr.toLowerCase().includes('quota') ||
+            msgStr.toLowerCase().includes('overloaded');
 
           if (isRetryableModelFailure) {
-            finalError = new Error(rawMsg);
+            finalError = new Error(msgStr);
             const nextModel = effectiveChain[modelIdx + 1];
 
             if (nextModel) {
@@ -1801,8 +1773,7 @@ export async function executeAcademicActionWithCascade(options: DispatchOptions)
             }
           }
 
-          // Transient 5xx or parsing issue: fall back across remaining models/keys silently before failing
-          finalError = new Error(rawMsg);
+          finalError = new Error(msgStr);
           if (modelIdx < effectiveChain.length - 1) {
             await new Promise((r) => setTimeout(r, 300));
             continue;
@@ -1819,10 +1790,12 @@ export async function executeAcademicActionWithCascade(options: DispatchOptions)
           } catch {}
         }
 
+        incrementDailyUsage(1200);
+
         if (parsedData?.modelUsed || modelIdx > 0 || keyIdx > 0) {
           onCascadeToast?.(
             '⚡ Completed via Intelligent Auto-Cascade',
-            'auto-cascade'
+            parsedData?.modelUsed || 'auto-cascade'
           );
         }
 
@@ -2154,9 +2127,7 @@ export function createLiveAudioSession(callbacks: {
   close: () => void;
 } {
   const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-  const apiKey = getActiveApiKey();
-  const queryParam = apiKey ? `?key=${encodeURIComponent(apiKey)}` : '';
-  const wsUrl = `${protocol}//${window.location.host}/api/live${queryParam}`;
+  const wsUrl = `${protocol}//${window.location.host}/api/live`;
   const ws = new WebSocket(wsUrl);
 
   ws.onmessage = (event) => {

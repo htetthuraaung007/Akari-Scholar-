@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import * as pdfjsLib from 'pdfjs-dist';
 import mammoth from 'mammoth';
+import { executeAcademicActionWithCascade } from '../services/geminiService';
 
 interface TurnitinAnalysisResult {
   estimatedSimilarityBand: string;
@@ -131,31 +132,18 @@ Return strictly valid JSON:
 `;
       const userPayload = `COURSE: ${courseCode}\nPROMPT: ${promptExcerpt}\nDRAFT EXCERPT (first 4,000 chars):\n${paperText.substring(0, 4000)}`;
 
-      const headers: Record<string, string> = { 'Content-Type': 'application/json' };
-      if (apiKey && apiKey.trim().length >= 10) {
-        headers['x-gemini-key'] = apiKey.trim();
-      }
-
-      const res = await fetch('/api/academic/assist', {
-        method: 'POST',
-        headers,
-        body: JSON.stringify({
-          action: 'direct_assist',
-          payload: {
-            prompt: `${systemPrompt}\n\n${userPayload}`,
-            systemInstruction: systemPrompt,
-            responseMimeType: 'application/json',
-            maxOutputTokens: 900
-          }
-        })
+      const rawResult = await executeAcademicActionWithCascade({
+        action: 'direct_assist',
+        primaryKey: apiKey && apiKey.trim().length >= 10 ? apiKey.trim() : undefined,
+        payload: {
+          prompt: `${systemPrompt}\n\n${userPayload}`,
+          systemInstruction: systemPrompt,
+          responseMimeType: 'application/json',
+          maxOutputTokens: 900,
+        },
       });
 
-      if (!res.ok) {
-        throw new Error('Turnitin Scan failed');
-      }
-
-      const data = await res.json();
-      const raw = typeof data.result === 'string' ? data.result : JSON.stringify(data.result || {});
+      const raw = typeof rawResult === 'string' ? rawResult : JSON.stringify(rawResult || {});
       const cleaned = raw.replace(/```json/gi, '').replace(/```/g, '').trim();
       setTurnitinResult(JSON.parse(cleaned));
     } catch {
@@ -165,7 +153,7 @@ Return strictly valid JSON:
     }
   };
 
-  // Search Scholarly Sources (Peer-reviewed & Books) via Server API
+  // Search Scholarly Sources (Peer-reviewed & Books) via Direct BYOK
   const handleSearchSources = async () => {
     if (!paperText.trim() && !promptExcerpt.trim()) {
       alert('ရှာဖွေရန် ခေါင်းစဉ် သို့မဟုတ် စာမူကြမ်းကို ထည့်သွင်းပေးပါခင်ဗျာ။');
@@ -195,31 +183,18 @@ Return strictly valid JSON array:
 `;
       const query = promptExcerpt.trim() ? `${promptExcerpt}\n\nExcerpt: ${paperText.substring(0, 2000)}` : paperText.substring(0, 3000);
 
-      const headers: Record<string, string> = { 'Content-Type': 'application/json' };
-      if (apiKey && apiKey.trim().length >= 10) {
-        headers['x-gemini-key'] = apiKey.trim();
-      }
-
-      const res = await fetch('/api/academic/assist', {
-        method: 'POST',
-        headers,
-        body: JSON.stringify({
-          action: 'direct_assist',
-          payload: {
-            prompt: `${systemPrompt}\n\nTopic / Paper:\n${query}`,
-            systemInstruction: systemPrompt,
-            responseMimeType: 'application/json',
-            maxOutputTokens: 1200
-          }
-        })
+      const rawResult = await executeAcademicActionWithCascade({
+        action: 'direct_assist',
+        primaryKey: apiKey && apiKey.trim().length >= 10 ? apiKey.trim() : undefined,
+        payload: {
+          prompt: `${systemPrompt}\n\nTopic / Paper:\n${query}`,
+          systemInstruction: systemPrompt,
+          responseMimeType: 'application/json',
+          maxOutputTokens: 1200,
+        },
       });
 
-      if (!res.ok) {
-        throw new Error('Source search failed');
-      }
-
-      const data = await res.json();
-      const raw = typeof data.result === 'string' ? data.result : JSON.stringify(data.result || []);
+      const raw = typeof rawResult === 'string' ? rawResult : JSON.stringify(rawResult || []);
       const cleaned = raw.replace(/```json/gi, '').replace(/```/g, '').trim();
       setFoundSources(JSON.parse(cleaned));
     } catch {

@@ -48,42 +48,23 @@ function normalizeAuditResult(parsed: any): DraftAuditResult {
   };
 }
 
+import { executeAcademicActionWithCascade } from './geminiService';
+
 export async function runDraftRubricAudit(
   draftText: string,
   targetRubric: string,
   apiKey?: string,
   instructorPersona?: string
 ): Promise<DraftAuditResult> {
-  const cleanKey = apiKey ? apiKey.trim() : '';
-  const headers: Record<string, string> = { 'Content-Type': 'application/json' };
-  if (cleanKey && cleanKey.length >= 10) {
-    headers['x-gemini-key'] = cleanKey;
-  }
-
-  const response = await fetch('/api/academic/assist', {
-    method: 'POST',
-    headers,
-    body: JSON.stringify({
-      action: 'draft_rubric_audit',
-      payload: {
-        draftText,
-        targetRubric,
-        instructorPersona
-      }
-    })
+  const rawResult = await executeAcademicActionWithCascade({
+    action: 'draft_rubric_audit',
+    primaryKey: apiKey ? apiKey.trim() : undefined,
+    payload: {
+      draftText,
+      targetRubric,
+      instructorPersona,
+    },
   });
-
-  if (!response.ok) {
-    const errData = await response.json().catch(() => ({}));
-    throw new Error(
-      errData?.error ||
-        errData?.message ||
-        'Draft စစ်ဆေးချက် ပြီးမြောက်အောင် မဆောင်ရွက်နိုင်ပါ။ ကျေးဇူးပြု၍ ကွန်ရက်ချိတ်ဆက်မှုကို စစ်ဆေးပေးပါခင်ဗျာ။'
-    );
-  }
-
-  const data = await response.json();
-  const rawResult = data.result || data;
 
   let parsed: any = rawResult;
   if (typeof rawResult === 'string') {

@@ -28,61 +28,30 @@ export const StudyAudioStudio: React.FC<StudyAudioStudioProps> = ({
   onNavigateToPomodoroTab,
   isInPomodoroWorkspace = true
 }) => {
-  // Queue & Track State
-  const [queue, setQueue] = useState<MusicTrack[]>(() => {
-    const saved = localStorage.getItem('akari_music_queue_v2');
-    if (saved) {
-      try {
-        const parsed = JSON.parse(saved);
-        if (Array.isArray(parsed)) return parsed;
-      } catch {}
-    }
-    return [];
-  });
+  // Queue & Track State (Strict Clean Zero-State on initial load)
+  const [queue, setQueue] = useState<MusicTrack[]>([]);
+  const [currentTrackIndex, setCurrentTrackIndex] = useState<number>(0);
 
-  const [currentTrackIndex, setCurrentTrackIndex] = useState<number>(() => {
-    const idx = localStorage.getItem('akari_current_track_idx_v2');
-    const parsed = idx ? parseInt(idx, 10) : 0;
-    return isNaN(parsed) || parsed < 0 ? 0 : parsed;
-  });
-
-  // History State
-  const [history, setHistory] = useState<MusicTrack[]>(() => {
-    const saved = localStorage.getItem('akari_music_history_v2');
-    if (saved) {
-      try {
-        const parsed = JSON.parse(saved);
-        if (Array.isArray(parsed)) return parsed;
-      } catch {}
-    }
-    return [];
-  });
-
+  // History State (Strict Clean Zero-State on initial load)
+  const [history, setHistory] = useState<MusicTrack[]>([]);
   const [currentHistoryIndex, setCurrentHistoryIndex] = useState<number>(0);
 
   // Active Track & Strictly Stable Iframe Config
-  // iframeConfig ONLY changes when a different song (youtubeId) is loaded.
-  const initialTrack: MusicTrack | null = queue[currentTrackIndex] || queue[0] || null;
-  const [activeTrack, setActiveTrack] = useState<MusicTrack | null>(initialTrack);
+  // Do NOT mount or auto-play any video on startup (currentTrack = null, youtubeId = '', autoplay = 0)
+  const [activeTrack, setActiveTrack] = useState<MusicTrack | null>(null);
   const [iframeConfig, setIframeConfig] = useState<{ youtubeId: string; autoplay: 0 | 1 }>({
-    youtubeId: initialTrack ? initialTrack.youtubeId : '',
+    youtubeId: '',
     autoplay: 0
   });
 
   const [isPlaying, setIsPlaying] = useState<boolean>(false);
   const isPlayingRef = useRef<boolean>(false);
 
-  const [isRepeatOne, setIsRepeatOne] = useState<boolean>(() => {
-    return localStorage.getItem('akari_music_repeat_one_v2') === 'true';
-  });
-  const isRepeatOneRef = useRef<boolean>(isRepeatOne);
+  const [isRepeatOne, setIsRepeatOne] = useState<boolean>(false);
+  const isRepeatOneRef = useRef<boolean>(false);
 
   // Next / Previous Navigation Source Mode ('ask' | 'queue' | 'history')
-  const [navSourceMode, setNavSourceMode] = useState<NavSourceMode>(() => {
-    const saved = localStorage.getItem('akari_music_nav_mode_v2');
-    if (saved === 'queue' || saved === 'history' || saved === 'ask') return saved;
-    return 'ask';
-  });
+  const [navSourceMode, setNavSourceMode] = useState<NavSourceMode>('ask');
   const [pendingNavDirection, setPendingNavDirection] = useState<'prev' | 'next' | null>(null);
   const [rememberNavChoice, setRememberNavChoice] = useState<boolean>(false);
 
@@ -97,10 +66,10 @@ export const StudyAudioStudio: React.FC<StudyAudioStudioProps> = ({
   const [currentTimeSec, setCurrentTimeSec] = useState<number>(0);
   const [durationSec, setDurationSec] = useState<number>(0);
 
-  // Search & Navigation UI (activeTab supports null so clicking Queue or History twice hides the drawer)
-  const [searchQuery, setSearchQuery] = useState('');
+  // Search & Navigation UI (searchResults hidden until explicit search; queue tab shown empty)
+  const [searchQuery, setSearchQuery] = useState<string>('');
   const [searchResults, setSearchResults] = useState<MusicTrack[]>([]);
-  const [isSearching, setIsSearching] = useState(false);
+  const [isSearching, setIsSearching] = useState<boolean>(false);
   const [activeTab, setActiveTab] = useState<'queue' | 'history' | null>('queue');
   const [toastMessage, setToastMessage] = useState<string | null>(null);
 
@@ -228,16 +197,17 @@ export const StudyAudioStudio: React.FC<StudyAudioStudioProps> = ({
     };
   }, [syncIframePosition, activeTab, searchResults.length, pendingNavDirection]);
 
-  // Sync to Storage
+  // Clear any legacy cached audio keys on initial mount so startup is always a pristine Zero-State
   useEffect(() => {
     try {
-      localStorage.setItem('akari_music_queue_v2', JSON.stringify(queue));
-      localStorage.setItem('akari_current_track_idx_v2', String(currentTrackIndex));
-      localStorage.setItem('akari_music_repeat_one_v2', String(isRepeatOne));
-      localStorage.setItem('akari_music_history_v2', JSON.stringify(history));
-      localStorage.setItem('akari_music_nav_mode_v2', navSourceMode);
+      localStorage.removeItem('akari_music_queue');
+      localStorage.removeItem('akari_music_history');
+      localStorage.removeItem('akari_current_track_idx');
+      localStorage.removeItem('akari_music_queue_v2');
+      localStorage.removeItem('akari_music_history_v2');
+      localStorage.removeItem('akari_current_track_idx_v2');
     } catch {}
-  }, [queue, currentTrackIndex, isRepeatOne, history, navSourceMode]);
+  }, []);
 
   // Resolve any raw YouTube URL titles in existing queue/history on mount
   useEffect(() => {
@@ -397,7 +367,7 @@ export const StudyAudioStudio: React.FC<StudyAudioStudioProps> = ({
         const firstTrack = queue[currentTrackIndex] || queue[0];
         loadAndPlayTrack(firstTrack, true, false);
       } else {
-        showToast('ဖွင့်လှစ်လိုသော တေးဂီတ သို့မဟုတ် Lofi beats များကို ရှာဖွေထည့်သွင်းပါ');
+        showToast('ဖွင့်လှစ်လိုသော တေးဂီတများကို စာရင်းထဲသို့ ထည့်သွင်းပါ');
       }
       return;
     }
@@ -1021,9 +991,9 @@ export const StudyAudioStudio: React.FC<StudyAudioStudioProps> = ({
               />
               <span
                 className="text-xs font-bold text-slate-200 truncate"
-                title={activeTrack ? activeTrack.title : 'ရွေးချယ်ထားသော သီချင်း မရှိသေးပါ'}
+                title={activeTrack ? activeTrack.title : 'နားဆင်လိုသော တေးဂီတကို ရွေးချယ်ပါ'}
               >
-                🎵 {activeTrack ? activeTrack.title : 'ရွေးချယ်ထားသော သီချင်း မရှိသေးပါ (Idle)'}
+                🎵 {activeTrack ? activeTrack.title : 'နားဆင်လိုသော တေးဂီတကို ရွေးချယ်ပါ'}
               </span>
             </div>
 
@@ -1208,7 +1178,7 @@ export const StudyAudioStudio: React.FC<StudyAudioStudioProps> = ({
             </div>
             {queue.length === 0 ? (
               <p className="text-xs text-slate-500 py-2">
-                ဖွင့်လှစ်လိုသော တေးဂီတ သို့မဟုတ် Lofi beats များကို အပေါ်ဘက်မှ ရှာဖွေထည့်သွင်းပါ
+                ဖွင့်လှစ်လိုသော တေးဂီတများကို စာရင်းထဲသို့ ထည့်သွင်းပါ
               </p>
             ) : (
               <div className="space-y-1 max-h-60 overflow-y-auto">
@@ -1446,9 +1416,9 @@ export const StudyAudioStudio: React.FC<StudyAudioStudioProps> = ({
                 />
                 <span
                   className="text-xs font-bold text-slate-100 truncate"
-                  title={activeTrack ? activeTrack.title : 'Idle'}
+                  title={activeTrack ? activeTrack.title : 'နားဆင်လိုသော တေးဂီတကို ရွေးချယ်ပါ'}
                 >
-                  {activeTrack ? activeTrack.title : 'ရွေးချယ်ထားသော သီချင်း မရှိသေးပါ'}
+                  {activeTrack ? activeTrack.title : 'နားဆင်လိုသော တေးဂီတကို ရွေးချယ်ပါ'}
                 </span>
               </div>
 

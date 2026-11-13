@@ -1,4 +1,5 @@
 import React, { useState } from 'react';
+import { executeAcademicActionWithCascade } from '../services/geminiService';
 
 type MainStudioTab = 'scholarship' | 'academic_cv';
 type EssayType = 'star_leadership' | 'sop' | 'personal_statement';
@@ -118,40 +119,31 @@ Return strictly valid JSON:
 
       let generated = false;
 
-      // Primary Path: Server-side proxy (uses server GEMINI_API_KEY with auto-cascade, zero user setup needed)
-      // Primary Path: Server-side proxy (uses server GEMINI_API_KEY with auto-cascade)
       try {
-        const serverHeaders: Record<string, string> = { 'Content-Type': 'application/json' };
-        if (apiKey) serverHeaders['x-gemini-key'] = apiKey;
-
-        const serverRes = await fetch('/api/academic/assist', {
-          method: 'POST',
-          headers: serverHeaders,
-          body: JSON.stringify({
-            action: 'direct_assist',
-            payload: {
-              prompt: `${systemPrompt}\n\n${userPayload}`,
-              systemInstruction: systemPrompt,
-              responseMimeType: 'application/json',
-              maxOutputTokens: 1200,
-              temperature: 0.25,
-            },
-          }),
+        const raw = await executeAcademicActionWithCascade({
+          action: 'direct_assist',
+          primaryKey: apiKey || undefined,
+          payload: {
+            prompt: `${systemPrompt}\n\n${userPayload}`,
+            systemInstruction: systemPrompt,
+            responseMimeType: 'application/json',
+            maxOutputTokens: 1200,
+            temperature: 0.25,
+          },
         });
 
-        if (serverRes.ok) {
-          const serverData = await serverRes.json();
-          const raw = serverData.result || serverData.text;
-          if (raw) {
-            const cleaned = String(raw).replace(/```json/gi, '').replace(/```/g, '').trim();
-            const parsed: GeneratedResult = JSON.parse(cleaned);
-            parsed.wordCount = parsed.content.trim().split(/\s+/).filter(Boolean).length;
-            setResult(parsed);
-            generated = true;
-          }
+        if (raw) {
+          const cleaned = String(typeof raw === 'string' ? raw : JSON.stringify(raw))
+            .replace(/```json/gi, '')
+            .replace(/```/g, '')
+            .trim();
+          const parsed: GeneratedResult = JSON.parse(cleaned);
+          parsed.wordCount = parsed.content.trim().split(/\s+/).filter(Boolean).length;
+          setResult(parsed);
+          generated = true;
         }
       } catch (e) {
-        console.error('Server generation error:', e);
+        console.error('Career generation error:', e);
       }
 
       if (!generated) {

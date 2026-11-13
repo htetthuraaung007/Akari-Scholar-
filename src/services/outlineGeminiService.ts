@@ -20,7 +20,12 @@ export interface MultiImageOutlineResult {
   insiderAdviceForMaxGrade: string;
 }
 
-import { CASCADE_MODEL_PRIORITY as VISION_MODELS } from './geminiService';
+import {
+  CASCADE_MODEL_PRIORITY as VISION_MODELS,
+  executeAcademicActionWithCascade,
+} from './geminiService';
+
+export { VISION_MODELS };
 
 export function sanitizeJsonOutput(raw: string): string {
   if (!raw) return '{}';
@@ -35,30 +40,14 @@ export async function runMultiImageOutlineAnalysis(
   images: { base64: string; mimeType: string }[],
   apiKey?: string
 ): Promise<MultiImageOutlineResult> {
-  const headers: Record<string, string> = { 'Content-Type': 'application/json' };
-  if (apiKey && apiKey.trim().length >= 15) {
-    headers['x-gemini-key'] = apiKey.trim();
-  }
-
-  const response = await fetch('/api/academic/assist', {
-    method: 'POST',
-    headers,
-    body: JSON.stringify({
-      action: 'outline_analysis',
-      payload: {
-        textPayload,
-        images
-      }
-    })
+  const rawResult = await executeAcademicActionWithCascade({
+    action: 'outline_analysis',
+    primaryKey: apiKey,
+    payload: {
+      textPayload,
+      images,
+    },
   });
-
-  if (!response.ok) {
-    const errData = await response.json().catch(() => ({}));
-    throw new Error(errData.error || errData.message || `Outline ခွဲခြမ်းစိတ်ဖြာခြင်း မအောင်မြင်ပါ (HTTP ${response.status})`);
-  }
-
-  const data = await response.json();
-  const rawResult = data.result || data;
 
   let parsed: any = rawResult;
   if (typeof rawResult === 'string') {

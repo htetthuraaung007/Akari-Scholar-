@@ -13,7 +13,14 @@ import {
 import { encryptAndSave, loadAndDecrypt, clearAllLocalData } from '../utils/crypto';
 import { calculateSM2, ReviewGrade } from '../utils/sm2';
 import { throttleGuard, LocalInBrowserEngine } from '../utils/engine';
-import { loadKeyPoolFromStorage, saveKeyPoolToStorage, calculatePacificMidnightResetSeconds } from '../services/geminiService';
+import {
+  loadKeyPoolFromStorage,
+  saveKeyPoolToStorage,
+  calculatePacificMidnightResetSeconds,
+  executeAcademicActionWithCascade,
+  testGeminiApiKey,
+  getActiveApiKey,
+} from '../services/geminiService';
 
 export interface ReadingSessionProgress {
   bookId: string;
@@ -264,36 +271,31 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     setApiHealth((prev) => ({ ...prev, status: 'checking', message: 'Verifying API status...' }));
     try {
       const headers: Record<string, string> = {};
-      if (settings.useCustomKey && settings.customGeminiKey) {
-        headers['x-gemini-key'] = settings.customGeminiKey;
+      const candidateKey =
+        (settings.useCustomKey && settings.customGeminiKey ? settings.customGeminiKey : '') ||
+        getActiveApiKey();
+      if (candidateKey) {
+        headers['x-gemini-key'] = candidateKey;
       }
       const res = await fetch('/api/academic/health', { headers });
-      const text = await res.text();
-      let data: any = {};
-      try {
-        if (text && !text.trim().startsWith('<')) {
-          data = JSON.parse(text);
-        }
-      } catch {
-        data = {};
-      }
+      const data = await res.json().catch(() => ({}));
       const statusObj: ApiHealthStatus = {
         status: data.status || (data.healthy ? 'healthy' : 'error'),
         healthy: Boolean(data.healthy),
         latencyMs: data.latencyMs || 0,
         model: data.model,
         message: data.message || 'Status verified',
-        quotaIndicator: data.quotaIndicator || 'normal',
+        quotaIndicator: data.quotaIndicator || (data.healthy ? 'optimal' : 'low'),
         lastChecked: new Date().toLocaleTimeString(),
       };
       setApiHealth(statusObj);
       return statusObj;
-    } catch (err: any) {
+    } catch {
       const failObj: ApiHealthStatus = {
         status: 'error',
         healthy: false,
         latencyMs: 0,
-        message: 'Cannot reach server or health endpoint',
+        message: 'Cannot reach server health endpoint',
         quotaIndicator: 'low',
         lastChecked: new Date().toLocaleTimeString(),
       };
@@ -654,133 +656,19 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     // 2. Throttle Guard (Guards 15 RPM Free Tier limit)
     await throttleGuard.throttle();
 
-    // 3. Dual-Key & Multi-Account Key Pool Resolution with Smart Failover
-    const primaryStored = (
-      localStorage.getItem('akari_gemini_api_key_primary') ||
-      localStorage.getItem('akari_primary_gemini_key') ||
-      localStorage.getItem('gemini_api_key') ||
-      localStorage.getItem('apiKey') ||
-      ''
-    ).replace(/["'\s]/g, '').trim();
-    const backupStored = (
-      localStorage.getItem('akari_gemini_api_key_backup') ||
-      localStorage.getItem('akari_backup_gemini_key') ||
-      ''
-    ).replace(/["'\s]/g, '').trim();
-    const pool = loadKeyPoolFromStorage();
-    const candidateKeys: string[] = [];
+    const customKey =
+      settings.useCustomKey && settings.customGeminiKey ? settings.customGeminiKey.trim() : undefined;
 
-    if (primaryStored) {
-      candidateKeys.push(primaryStored);
-    }
-
-    if (pool.length > 0) {
-      const activeKeys = pool.filter((k) => k.status === 'active').map((k) => k.key);
-      const remainingKeys = pool.filter((k) => k.status !== 'active' && k.status !== 'invalid').map((k) => k.key);
-      for (const k of [...activeKeys, ...remainingKeys]) {
-        if (!candidateKeys.includes(k)) candidateKeys.push(k);
-      }
-    } else if (settings.useCustomKey && settings.customGeminiKey && !candidateKeys.includes(settings.customGeminiKey)) {
-      candidateKeys.push(settings.customGeminiKey);
-    }
-
-    if (backupStored && !candidateKeys.includes(backupStored)) {
-      candidateKeys.push(backupStored);
-    }
-
-    if (candidateKeys.length === 0) {
-      candidateKeys.push(''); // Server default proxy
-    }
-
-    let lastError: any = null;
-    let allKeysExhausted = true;
-
-    for (const testKey of candidateKeys) {
-      try {
-        const headers: Record<string, string> = {
-          'Content-Type': 'application/json',
-        };
-
-        if (testKey) {
-          headers['x-gemini-key'] = testKey;
-        }
-
-        const response = await fetch('/api/academic/assist', {
-          method: 'POST',
-          headers,
-          body: JSON.stringify({
-            action,
-            payload,
-            targetLanguage: targetLanguage || settings.language,
-            model: settings.preferredModel && settings.preferredModel !== 'auto' ? settings.preferredModel : undefined,
-          }),
-        });
-
-        let rawText = '';
-        try {
-          rawText = await response.text();
-        } catch {
-          rawText = '';
-        }
-
-        let data: any = null;
-        if (rawText && !rawText.trim().startsWith('<')) {
-          try {
-            data = JSON.parse(rawText);
-          } catch {
-            data = null;
-          }
-        }
-
-        if (!response.ok || !data) {
-          const rawMsg = data?.error || data?.message || (rawText.trim().startsWith('<') ? 'AI Service temporarily unavailable. Retrying...' : rawText) || `HTTP ${response.status}`;
-          const is429 = response.status === 429 || rawMsg.includes('429') || rawMsg.includes('quota') || rawMsg.includes('RESOURCE_EXHAUSTED');
-
-          if (is429 && candidateKeys.length > 1) {
-            console.warn('[Key Failover] Active key exhausted. Rotating to next account key in pool...');
-            // Mark this key as exhausted in pool
-            if (testKey && pool.length > 0) {
-              const updatedPool = pool.map((k) => (k.key === testKey ? { ...k, status: 'quota_exhausted' as const } : k));
-              saveKeyPoolToStorage(updatedPool);
-            }
-            continue; // seamlessly failover to next key in pool
-          }
-
-          if (testKey && pool.length > 0) {
-            if (response.status === 400 || response.status === 403 || rawMsg.includes('API_KEY_INVALID')) {
-              const updatedPool = pool.map((k) => (k.key === testKey ? { ...k, status: 'invalid' as const } : k));
-              saveKeyPoolToStorage(updatedPool);
-            }
-          }
-
-          throw new Error(rawMsg);
-        }
-
-        // On successful API response, ensure key is marked active in pool
-        if (testKey && pool.length > 0) {
-          const updatedPool = pool.map((k) => (k.key === testKey ? { ...k, status: 'active' as const, lastUsed: new Date().toISOString() } : k));
-          saveKeyPoolToStorage(updatedPool);
-        }
-
-        return data.result;
-      } catch (err: any) {
-        lastError = err;
-        const msg = String(err?.message || err);
-        const is429 = msg.includes('429') || msg.includes('quota') || msg.includes('RESOURCE_EXHAUSTED');
-        if (!is429) {
-          allKeysExhausted = false;
-          throw err;
-        }
-      }
-    }
-
-    if (allKeysExhausted && candidateKeys.length > 0) {
-      const quotaErr = new Error('Gemini Free Quota ပြည့်သွားပါသည်။ Quota reset ဖြစ်ရန် Pacific Midnight အထိ စောင့်ဆိုင်းရန် လိုအပ်ပါသည်။ စနစ်က အလိုအလျောက် ပြန်လည်စစ်ဆေးပေးပါမည်။');
-      (quotaErr as any).isQuotaExhausted = true;
-      throw quotaErr;
-    }
-
-    throw lastError || new Error('API request failed');
+    return await executeAcademicActionWithCascade({
+      action,
+      payload,
+      targetLanguage: targetLanguage || settings.language,
+      preferredModel:
+        settings.preferredModel && settings.preferredModel !== 'auto'
+          ? settings.preferredModel
+          : undefined,
+      primaryKey: customKey,
+    });
   };
 
   // Global Persistent YouTube Player State (never unmounts across tabs)

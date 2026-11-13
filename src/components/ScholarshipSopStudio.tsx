@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { loadPersistedTabState, savePersistedTabState } from '../utils/researchPersistence';
+import { executeAcademicActionWithCascade } from '../services/geminiService';
 
 type StudioSection = 'sop' | 'star' | 'personal' | 'academic_cv';
 
@@ -284,46 +285,43 @@ Return strictly valid JSON:
 
       let generated = false;
 
-      // Primary Path: Server-side proxy (uses server GEMINI_API_KEY with auto-cascade)
       try {
-        const headers: Record<string, string> = { 'Content-Type': 'application/json' };
-        if (apiKey) headers['x-gemini-key'] = apiKey;
-
-        const serverRes = await fetch('/api/academic/assist', {
-          method: 'POST',
-          headers,
-          body: JSON.stringify({
-            action: 'direct_assist',
-            payload: {
-              prompt: `${systemPrompt}\n\n${userPayload}`,
-              systemInstruction: systemPrompt,
-              responseMimeType: 'application/json',
-              maxOutputTokens: 900,
-              temperature: 0.25,
-            },
-          }),
+        const raw = await executeAcademicActionWithCascade({
+          action: 'direct_assist',
+          primaryKey: apiKey || undefined,
+          payload: {
+            prompt: `${systemPrompt}\n\n${userPayload}`,
+            systemInstruction: systemPrompt,
+            responseMimeType: 'application/json',
+            maxOutputTokens: 900,
+            temperature: 0.25,
+          },
         });
 
-        if (serverRes.ok) {
-          const serverData = await serverRes.json();
-          const raw = serverData.result || serverData.text;
-          if (raw) {
-            const cleaned = String(raw).replace(/```json/gi, '').replace(/```/g, '').trim();
-            const parsed: GeneratedEssayResult = JSON.parse(cleaned);
-            parsed.wordCount = parsed.content.trim().split(/\s+/).filter(Boolean).length;
-            setResultForSection(sectionAtStart, parsed);
-            generated = true;
-          }
+        if (raw) {
+          const cleaned = String(typeof raw === 'string' ? raw : JSON.stringify(raw))
+            .replace(/```json/gi, '')
+            .replace(/```/g, '')
+            .trim();
+          const parsed: GeneratedEssayResult = JSON.parse(cleaned);
+          parsed.wordCount = parsed.content.trim().split(/\s+/).filter(Boolean).length;
+          setResultForSection(sectionAtStart, parsed);
+          generated = true;
         }
-      } catch (e) {
-        console.error('Scholarship server assist error:', e);
+      } catch (e: any) {
+        console.error('Scholarship BYOK assist error:', e);
+        setNoticeMessage(
+          e?.message ||
+            'ရေးသားရာတွင် ချို့ယွင်းချက် ဖြစ်ပေါ်ပါသည်ခင်ဗျာ။ ကျေးဇူးပြု၍ ပြန်လည်စမ်းသပ်ပေးပါခင်ဗျာ။'
+        );
+        return;
       }
 
       if (!generated) {
         setNoticeMessage('ရေးသားရာတွင် ချို့ယွင်းချက် ဖြစ်ပေါ်ပါသည်ခင်ဗျာ။ ကျေးဇူးပြု၍ ပြန်လည်စမ်းသပ်ပေးပါခင်ဗျာ။');
       }
-    } catch {
-      setNoticeMessage('ရေးသားရာတွင် ချို့ယွင်းချက် ဖြစ်ပေါ်ပါသည်ခင်ဗျာ။');
+    } catch (err: any) {
+      setNoticeMessage(err?.message || 'ရေးသားရာတွင် ချို့ယွင်းချက် ဖြစ်ပေါ်ပါသည်ခင်ဗျာ။');
     } finally {
       setLoadingSection(null);
     }

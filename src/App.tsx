@@ -69,9 +69,14 @@ const MainLayout: React.FC = () => {
         setActiveWorkspace(null);
       }
     };
+    const handleOpenKeyModal = () => {
+      setPrivacyModalOpen(true);
+    };
     window.addEventListener('akari_navigate_tab', handleNavigateTab);
+    window.addEventListener('akari_open_api_key_modal', handleOpenKeyModal);
     return () => {
       window.removeEventListener('akari_navigate_tab', handleNavigateTab);
+      window.removeEventListener('akari_open_api_key_modal', handleOpenKeyModal);
     };
   }, [setActiveTab]);
   const t = translations[language];
