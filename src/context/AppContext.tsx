@@ -273,27 +273,40 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
       const candidateKey =
         (settings.useCustomKey && settings.customGeminiKey ? settings.customGeminiKey : '') ||
         getActiveApiKey();
-      if (!candidateKey) {
-        const missingObj: ApiHealthStatus = {
-          status: 'missing_key',
-          healthy: false,
-          latencyMs: 0,
-          message: 'Ready for your Gemini API Key in Key Vault',
-          quotaIndicator: 'normal',
+      const headers: Record<string, string> = {
+        'Content-Type': 'application/json',
+      };
+      if (candidateKey) {
+        headers['x-gemini-key'] = candidateKey;
+        headers['x-goog-api-key'] = candidateKey;
+      }
+      const res = await fetch('/api/academic/health', {
+        method: 'GET',
+        headers,
+      });
+      const data = await res.json().catch(() => null);
+      if (res.ok && data?.healthy) {
+        const statusObj: ApiHealthStatus = {
+          status: 'healthy',
+          healthy: true,
+          latencyMs: data.latencyMs || 0,
+          model: data.model || 'gemini-2.5-flash',
+          message: data.message || 'Connected to Gemini API',
+          quotaIndicator: data.quotaIndicator || 'optimal',
           lastChecked: new Date().toLocaleTimeString(),
         };
-        setApiHealth(missingObj);
-        return missingObj;
+        setApiHealth(statusObj);
+        return statusObj;
       }
-      const res = await testGeminiApiKey(candidateKey);
-      const isQuota = res.message.includes('429') || res.message.toLowerCase().includes('quota');
+      const isQuota = res.status === 429 || data?.status === 'quota_exceeded';
+      const isMissing = res.status === 401 || data?.status === 'missing_key';
       const statusObj: ApiHealthStatus = {
-        status: res.success ? 'healthy' : isQuota ? 'quota_exceeded' : 'error',
-        healthy: res.success,
-        latencyMs: res.latency || 0,
-        model: 'gemini-2.5-flash',
-        message: res.message,
-        quotaIndicator: res.success ? 'optimal' : 'low',
+        status: isMissing ? 'missing_key' : isQuota ? 'quota_exceeded' : 'error',
+        healthy: false,
+        latencyMs: data?.latencyMs || 0,
+        model: data?.model || 'gemini-2.5-flash',
+        message: data?.message || 'Ready for your Gemini API Key in Key Vault',
+        quotaIndicator: isQuota ? 'low' : 'normal',
         lastChecked: new Date().toLocaleTimeString(),
       };
       setApiHealth(statusObj);
@@ -303,7 +316,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
         status: 'error',
         healthy: false,
         latencyMs: 0,
-        message: 'Network connection error - Ensure VPN is active and stable',
+        message: 'Network connection error - Ensure server is reachable',
         quotaIndicator: 'low',
         lastChecked: new Date().toLocaleTimeString(),
       };

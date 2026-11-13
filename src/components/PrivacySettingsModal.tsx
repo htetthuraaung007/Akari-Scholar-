@@ -312,22 +312,24 @@ export const PrivacySettingsModal: React.FC<PrivacyModalProps> = ({ isOpen, onCl
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm animate-in fade-in">
-      <div className="bg-slate-900 border border-slate-800 rounded-3xl max-w-2xl w-full p-6 max-h-[92vh] overflow-y-auto shadow-2xl relative space-y-6">
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-4 bg-black/80 backdrop-blur-sm animate-in fade-in">
+      <div className="bg-slate-900 border border-slate-800 w-full max-w-lg mx-auto my-auto max-h-[90vh] overflow-y-auto rounded-2xl p-4 sm:p-6 shadow-2xl relative space-y-5">
         <button
+          type="button"
           onClick={onClose}
-          className="absolute top-4 right-4 p-2 rounded-lg text-slate-400 hover:text-white hover:bg-slate-800"
+          aria-label="Close Key Vault"
+          className="absolute top-3 right-3 sm:top-4 sm:right-4 min-h-[44px] min-w-[44px] p-2.5 rounded-xl bg-slate-800/80 border border-slate-700/80 text-slate-300 hover:text-white hover:bg-slate-700 flex items-center justify-center transition-colors cursor-pointer z-10"
         >
           <X className="w-5 h-5" />
         </button>
 
         {/* Header */}
-        <div className="flex items-center space-x-3">
-          <div className="w-10 h-10 rounded-2xl bg-emerald-500/10 border border-emerald-500/20 text-emerald-400 flex items-center justify-center">
+        <div className="flex items-center space-x-3 pr-12">
+          <div className="w-10 h-10 rounded-2xl bg-emerald-500/10 border border-emerald-500/20 text-emerald-400 flex items-center justify-center shrink-0">
             <ShieldCheck className="w-6 h-6" />
           </div>
-          <div>
-            <h2 className="text-xl font-bold text-white tracking-tight">
+          <div className="min-w-0">
+            <h2 className="text-lg sm:text-xl font-bold text-white tracking-tight">
               🔑 Gemini API Key Vault
             </h2>
             <p className="text-xs text-slate-400">
@@ -337,7 +339,7 @@ export const PrivacySettingsModal: React.FC<PrivacyModalProps> = ({ isOpen, onCl
         </div>
 
         {/* Pure Gemini Multi-Key Vault Card */}
-        <div className="p-5 rounded-2xl bg-slate-950 border border-indigo-500/30 space-y-4">
+        <div className="p-3.5 sm:p-5 rounded-2xl bg-slate-950 border border-indigo-500/30 space-y-4">
           <div className="pb-2 border-b border-slate-800 space-y-2.5">
             <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
               <div className="space-y-0.5">
@@ -397,25 +399,25 @@ export const PrivacySettingsModal: React.FC<PrivacyModalProps> = ({ isOpen, onCl
                   }
                 }}
                 placeholder="Paste Gemini API Key (AQ... or AIza...)"
-                className="flex-1 px-3.5 py-2.5 text-xs bg-slate-950 border border-slate-700 rounded-xl text-white font-mono placeholder-slate-500 focus:outline-none focus:border-indigo-500"
+                className="w-full flex-1 px-3.5 py-2.5 min-h-[48px] text-base bg-slate-950 border border-slate-700 rounded-xl text-white font-mono placeholder-slate-500 focus:outline-none focus:border-indigo-500"
               />
-              <div className="flex gap-2 shrink-0">
+              <div className="flex flex-col sm:flex-row gap-2 shrink-0 w-full sm:w-auto">
                 <button
                   type="button"
                   onClick={handleTestPrimaryKey}
                   disabled={isTestingPrimary || !geminiKeyInput.trim()}
-                  className="px-3.5 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 border border-slate-700 text-indigo-300 font-bold text-xs transition-colors cursor-pointer disabled:opacity-50 flex items-center space-x-1.5"
+                  className="w-full sm:w-auto min-h-[48px] sm:min-h-[44px] px-4 py-2.5 rounded-xl bg-slate-800 hover:bg-slate-700 border border-slate-700 text-indigo-300 font-bold text-xs sm:text-xs transition-colors cursor-pointer disabled:opacity-50 flex items-center justify-center space-x-1.5"
                 >
-                  <FlaskConical className={`w-3.5 h-3.5 ${isTestingPrimary ? 'animate-bounce' : ''}`} />
+                  <FlaskConical className={`w-4 h-4 ${isTestingPrimary ? 'animate-bounce' : ''}`} />
                   <span>🧪 Test Key (စစ်ဆေးမည်)</span>
                 </button>
                 <button
                   type="button"
                   onClick={handleSaveGeminiKey}
                   disabled={isTestingPrimary || !geminiKeyInput.trim()}
-                  className="px-4 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white font-bold text-xs transition-colors cursor-pointer disabled:opacity-50 flex items-center space-x-1.5 shadow-sm shadow-indigo-600/30"
+                  className="w-full sm:w-auto min-h-[48px] sm:min-h-[44px] px-4 py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white font-bold text-xs sm:text-xs transition-colors cursor-pointer disabled:opacity-50 flex items-center justify-center space-x-1.5 shadow-sm shadow-indigo-600/30"
                 >
-                  <Check className="w-3.5 h-3.5" />
+                  <Check className="w-4 h-4" />
                   <span>💾 Save &amp; Activate</span>
                 </button>
               </div>
@@ -505,25 +507,25 @@ export const PrivacySettingsModal: React.FC<PrivacyModalProps> = ({ isOpen, onCl
                   }
                 }}
                 placeholder="Optional: Paste second Gmail Gemini Key (AQ... or AIza...)"
-                className="flex-1 px-3.5 py-2.5 text-xs bg-slate-950 border border-slate-700 rounded-xl text-white font-mono placeholder-slate-500 focus:outline-none focus:border-emerald-500"
+                className="w-full flex-1 px-3.5 py-2.5 min-h-[48px] text-base bg-slate-950 border border-slate-700 rounded-xl text-white font-mono placeholder-slate-500 focus:outline-none focus:border-emerald-500"
               />
-              <div className="flex gap-2 shrink-0">
+              <div className="flex flex-col sm:flex-row gap-2 shrink-0 w-full sm:w-auto">
                 <button
                   type="button"
                   onClick={handleTestBackupKey}
                   disabled={isTestingBackup || !backupKeyInput.trim()}
-                  className="px-3.5 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 border border-slate-700 text-emerald-300 font-bold text-xs transition-colors cursor-pointer disabled:opacity-50 flex items-center space-x-1.5"
+                  className="w-full sm:w-auto min-h-[48px] sm:min-h-[44px] px-4 py-2.5 rounded-xl bg-slate-800 hover:bg-slate-700 border border-slate-700 text-emerald-300 font-bold text-xs transition-colors cursor-pointer disabled:opacity-50 flex items-center justify-center space-x-1.5"
                 >
-                  <FlaskConical className={`w-3.5 h-3.5 ${isTestingBackup ? 'animate-bounce' : ''}`} />
+                  <FlaskConical className={`w-4 h-4 ${isTestingBackup ? 'animate-bounce' : ''}`} />
                   <span>🧪 Test Key</span>
                 </button>
                 <button
                   type="button"
                   onClick={handleSaveBackupKey}
                   disabled={isTestingBackup || !backupKeyInput.trim()}
-                  className="px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-xs transition-colors cursor-pointer disabled:opacity-50 flex items-center space-x-1.5"
+                  className="w-full sm:w-auto min-h-[48px] sm:min-h-[44px] px-4 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-xs transition-colors cursor-pointer disabled:opacity-50 flex items-center justify-center space-x-1.5"
                 >
-                  <Check className="w-3.5 h-3.5" />
+                  <Check className="w-4 h-4" />
                   <span>💾 Save Key</span>
                 </button>
               </div>
@@ -617,17 +619,17 @@ export const PrivacySettingsModal: React.FC<PrivacyModalProps> = ({ isOpen, onCl
                   value={newKeyLabel}
                   onChange={(e) => setNewKeyLabel(e.target.value)}
                   placeholder={language === 'my' ? 'အကောင့်အမည် (e.g., Account C)' : 'Account Label (e.g., Account C)'}
-                  className="px-3 py-2 text-xs bg-slate-950 border border-slate-700 rounded-xl text-white placeholder-slate-500 focus:outline-none focus:border-indigo-500"
+                  className="px-3.5 py-2.5 min-h-[48px] text-base bg-slate-950 border border-slate-700 rounded-xl text-white placeholder-slate-500 focus:outline-none focus:border-indigo-500"
                 />
                 <input
                   type="password"
                   value={newKeyInput}
                   onChange={(e) => setNewKeyInput(e.target.value)}
                   placeholder="Paste Gemini API key (AQ... or AIza...)"
-                  className="sm:col-span-2 px-3 py-2 text-xs bg-slate-950 border border-slate-700 rounded-xl text-white font-mono placeholder-slate-500 focus:outline-none focus:border-indigo-500"
+                  className="sm:col-span-2 px-3.5 py-2.5 min-h-[48px] text-base bg-slate-950 border border-slate-700 rounded-xl text-white font-mono placeholder-slate-500 focus:outline-none focus:border-indigo-500"
                 />
               </div>
-              <div className="flex items-center justify-between pt-1">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 pt-1">
                 <span className="text-[10px] text-slate-400">
                   Client-side Web Crypto AES-256 encrypted · Never sent to third-party servers
                 </span>
@@ -635,9 +637,9 @@ export const PrivacySettingsModal: React.FC<PrivacyModalProps> = ({ isOpen, onCl
                   type="button"
                   onClick={handleAddKey}
                   disabled={isAddingKey || !newKeyInput.trim()}
-                  className="flex items-center space-x-1.5 px-3.5 py-1.5 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-semibold shadow transition-all cursor-pointer disabled:opacity-50"
+                  className="w-full sm:w-auto min-h-[44px] flex items-center justify-center space-x-1.5 px-4 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-semibold shadow transition-all cursor-pointer disabled:opacity-50"
                 >
-                  <Plus className="w-3.5 h-3.5" />
+                  <Plus className="w-4 h-4" />
                   <span>{isAddingKey ? 'Verifying...' : 'Add Key'}</span>
                 </button>
               </div>
@@ -742,16 +744,18 @@ export const PrivacySettingsModal: React.FC<PrivacyModalProps> = ({ isOpen, onCl
         </div>
 
         {/* Footer actions */}
-        <div className="flex items-center justify-end space-x-3 pt-2">
+        <div className="flex flex-col-reverse sm:flex-row items-stretch sm:items-center justify-end gap-2 sm:space-x-3 pt-2">
           <button
+            type="button"
             onClick={onClose}
-            className="px-4 py-2 rounded-xl text-xs font-semibold bg-slate-800 text-slate-300 hover:bg-slate-700"
+            className="min-h-[44px] px-4 py-2.5 rounded-xl text-xs font-semibold bg-slate-800 text-slate-300 hover:bg-slate-700 cursor-pointer"
           >
             {t.common.cancel}
           </button>
           <button
+            type="button"
             onClick={handleSave}
-            className="flex items-center space-x-2 px-5 py-2 rounded-xl text-xs font-semibold bg-indigo-600 text-white hover:bg-indigo-500 shadow-md shadow-indigo-600/20"
+            className="min-h-[44px] flex items-center justify-center space-x-2 px-5 py-2.5 rounded-xl text-xs font-semibold bg-indigo-600 text-white hover:bg-indigo-500 shadow-md shadow-indigo-600/20 cursor-pointer"
           >
             {savedSuccess ? (
               <>

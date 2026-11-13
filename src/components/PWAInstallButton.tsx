@@ -15,11 +15,12 @@ export const PWAInstallButton: React.FC = () => {
   if (isInstallable) {
     return (
       <button
+        type="button"
         onClick={install}
-        className="flex items-center space-x-1.5 px-3 py-1.5 rounded-lg bg-indigo-600/90 hover:bg-indigo-600 border border-indigo-500/40 text-white text-xs font-semibold shadow-sm transition-all"
+        className="flex items-center space-x-1.5 px-3 py-1.5 rounded-lg bg-indigo-600/90 hover:bg-indigo-600 border border-indigo-500/40 text-white text-xs font-semibold shadow-sm transition-all whitespace-nowrap shrink-0 cursor-pointer"
         title="Install as Progressive Web App"
       >
-        <Download className="w-3.5 h-3.5" />
+        <Download className="w-3.5 h-3.5 shrink-0" />
         <span>Install App</span>
       </button>
     );
@@ -30,10 +31,11 @@ export const PWAInstallButton: React.FC = () => {
     return (
       <>
         <button
+          type="button"
           onClick={() => setShowIOSGuide(true)}
-          className="flex items-center space-x-1.5 px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 border border-slate-700 text-slate-200 text-xs font-semibold transition-all"
+          className="flex items-center space-x-1.5 px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 border border-slate-700 text-slate-200 text-xs font-semibold transition-all whitespace-nowrap shrink-0 cursor-pointer"
         >
-          <Smartphone className="w-3.5 h-3.5 text-indigo-400" />
+          <Smartphone className="w-3.5 h-3.5 text-indigo-400 shrink-0" />
           <span>Install on iOS</span>
         </button>
 

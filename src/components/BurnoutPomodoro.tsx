@@ -721,13 +721,13 @@ export const BurnoutPomodoro: React.FC = () => {
         </p>
       </div>
 
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 w-full">
         {/* =========================================================================
             LEFT COLUMN: POMODORO TIMER + DUAL-MODE FOCUS AUDIO
            ========================================================================= */}
         <div
           ref={pomodoroCardRef}
-          className="p-6 rounded-3xl bg-slate-900 border border-slate-800 flex flex-col justify-between items-center text-center shadow-xl space-y-6"
+          className="w-full min-w-0 overflow-hidden p-6 rounded-3xl bg-slate-900 border border-slate-800 flex flex-col justify-between items-center text-center shadow-xl space-y-6"
         >
           {/* Mode switch pills */}
           <div className="flex bg-slate-950 p-1.5 rounded-2xl border border-slate-800 gap-1">
@@ -839,7 +839,7 @@ export const BurnoutPomodoro: React.FC = () => {
           {/* =========================================================================
               FOCUS AUDIO STUDIO: DUAL ENGINE (BACKGROUND-IMMUNE RADIO & YOUTUBE)
              ========================================================================= */}
-          <div className="w-full pt-4 border-t border-slate-800 space-y-3.5 text-left">
+          <div className="w-full min-w-0 pt-4 border-t border-slate-800 space-y-3.5 text-left">
             {/* Audio Element with Safe Silent Stream Error Handler */}
             <audio
               ref={audioRef}
@@ -850,15 +850,15 @@ export const BurnoutPomodoro: React.FC = () => {
             />
 
             {/* Unified Study Audio Studio Portal Target (Master stream runs at Root in App.tsx) */}
-            <div id="pomodoro-audio-portal" className="animate-in fade-in pt-1" />
+            <div id="pomodoro-audio-portal" className="w-full min-w-0 overflow-hidden animate-in fade-in pt-1" />
           </div>
         </div>
 
         {/* =========================================================================
             RIGHT COLUMN: CLINICAL BURNOUT & FATIGUE ASSESSMENT (READ-ONLY METRICS)
            ========================================================================= */}
-        <div className="space-y-6">
-          <div className="p-6 rounded-3xl bg-slate-900 border border-slate-800 space-y-5 shadow-xl">
+        <div className="w-full min-w-0 space-y-6">
+          <div className="w-full min-w-0 overflow-hidden p-6 rounded-3xl bg-slate-900 border border-slate-800 space-y-5 shadow-xl">
             {/* Header & Status Badge */}
             <div className="flex items-center justify-between">
               <div className="flex items-center space-x-2">

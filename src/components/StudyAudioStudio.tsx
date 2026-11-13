@@ -5,7 +5,11 @@ export interface MusicTrack {
   id: string;
   title: string;
   youtubeId: string;
+  playedAt?: string;
 }
+
+const STORAGE_KEY_QUEUE = 'akari_audio_queue';
+const STORAGE_KEY_HISTORY = 'akari_audio_history';
 
 const PRESET_YOUTUBE_TRACKS: MusicTrack[] = [
   { id: 'track_myanmar', title: 'Myanmar Instrumental', youtubeId: 'U4t25OiyJys' },
@@ -24,16 +28,40 @@ interface StudyAudioStudioProps {
 
 type NavSourceMode = 'ask' | 'queue' | 'history';
 
+export const BUILD_VER = 'v2.1-audio-fixed';
+
 export const StudyAudioStudio: React.FC<StudyAudioStudioProps> = ({
   onNavigateToPomodoroTab,
   isInPomodoroWorkspace = true
 }) => {
-  // Queue & Track State (Strict Clean Zero-State on initial load)
-  const [queue, setQueue] = useState<MusicTrack[]>([]);
+  useEffect(() => {
+    console.info('[StudyAudioStudio] Build:', BUILD_VER);
+  }, []);
+
+  // Queue State: Initialized from localStorage ('akari_audio_queue') with strict [] zero-fallback
+  const [queue, setQueue] = useState<MusicTrack[]>(() => {
+    try {
+      const saved = localStorage.getItem(STORAGE_KEY_QUEUE);
+      if (!saved) return [];
+      const parsed = JSON.parse(saved);
+      return Array.isArray(parsed) ? parsed : [];
+    } catch {
+      return [];
+    }
+  });
   const [currentTrackIndex, setCurrentTrackIndex] = useState<number>(0);
 
-  // History State (Strict Clean Zero-State on initial load)
-  const [history, setHistory] = useState<MusicTrack[]>([]);
+  // History State: Initialized from localStorage ('akari_audio_history') with strict [] zero-fallback
+  const [history, setHistory] = useState<MusicTrack[]>(() => {
+    try {
+      const saved = localStorage.getItem(STORAGE_KEY_HISTORY);
+      if (!saved) return [];
+      const parsed = JSON.parse(saved);
+      return Array.isArray(parsed) ? parsed : [];
+    } catch {
+      return [];
+    }
+  });
   const [currentHistoryIndex, setCurrentHistoryIndex] = useState<number>(0);
 
   // Active Track & Strictly Stable Iframe Config
@@ -55,18 +83,21 @@ export const StudyAudioStudio: React.FC<StudyAudioStudioProps> = ({
   const [pendingNavDirection, setPendingNavDirection] = useState<'prev' | 'next' | null>(null);
   const [rememberNavChoice, setRememberNavChoice] = useState<boolean>(false);
 
-  // Floating PiP States & Smooth Dragging (Hidden by default on launch; opens on explicit user interaction)
-  const [isPipFloating, setIsPipFloating] = useState<boolean>(false);
+  // Explicit Embedded Dock vs. Floating Mini-Player State (default: false)
+  const [isFloatingMode, setIsFloatingMode] = useState<boolean>(false);
+  const isPipFloating = isFloatingMode;
+  const setIsPipFloating = setIsFloatingMode;
+
   const [isCollapsed, setIsCollapsed] = useState(false);
-  const [position, setPosition] = useState({ x: 20, y: 80 });
+  const [position, setPosition] = useState({ x: 20, y: 20 });
   const [isDragging, setIsDragging] = useState(false);
-  const dragStartRef = useRef({ startX: 0, startY: 0, initialX: 20, initialY: 80 });
+  const dragStartRef = useRef({ startX: 0, startY: 0, initialX: 20, initialY: 20 });
 
   // Real-Time YouTube Progress Tracker
   const [currentTimeSec, setCurrentTimeSec] = useState<number>(0);
   const [durationSec, setDurationSec] = useState<number>(0);
 
-  // Search & Navigation UI (searchResults hidden until explicit search; queue tab shown empty)
+  // Search & Navigation UI (searchResults hidden until explicit search; queue tab shown)
   const [searchQuery, setSearchQuery] = useState<string>('');
   const [searchResults, setSearchResults] = useState<MusicTrack[]>([]);
   const [isSearching, setIsSearching] = useState<boolean>(false);
@@ -80,12 +111,10 @@ export const StudyAudioStudio: React.FC<StudyAudioStudioProps> = ({
   const timerIntervalRef = useRef<any>(null);
   const floatingPlayerRef = useRef<HTMLDivElement | null>(null);
 
-  // Single Permanent Master YouTube Iframe & Slot Refs
+  // Master YouTube Iframe Ref
   const masterIframeRef = useRef<HTMLIFrameElement | null>(null);
-  const iframeWrapperRef = useRef<HTMLDivElement | null>(null);
-  const videoSlotRef = useRef<HTMLDivElement | null>(null);
 
-  // Portal Target for embedding in Pomodoro Tab while master iframe stays permanently at Root
+  // Portal Target for embedding in Pomodoro Tab
   const [portalTarget, setPortalTarget] = useState<HTMLElement | null>(null);
 
   const showToast = (msg: string) => {
@@ -103,10 +132,55 @@ export const StudyAudioStudio: React.FC<StudyAudioStudioProps> = ({
     isRepeatOneRef.current = isRepeatOne;
   }, [isRepeatOne]);
 
+  // Automatically sync queue state to localStorage ('akari_audio_queue')
+  useEffect(() => {
+    try {
+      if (queue.length === 0) {
+        localStorage.removeItem(STORAGE_KEY_QUEUE);
+      } else {
+        localStorage.setItem(STORAGE_KEY_QUEUE, JSON.stringify(queue));
+      }
+    } catch {}
+  }, [queue]);
+
+  // Automatically sync history state to localStorage ('akari_audio_history')
+  useEffect(() => {
+    try {
+      if (history.length === 0) {
+        localStorage.removeItem(STORAGE_KEY_HISTORY);
+      } else {
+        localStorage.setItem(STORAGE_KEY_HISTORY, JSON.stringify(history));
+      }
+    } catch {}
+  }, [history]);
+
+  // Sync queue & history across multiple browser tabs via storage event
+  useEffect(() => {
+    const handleStorageSync = (e: StorageEvent) => {
+      if (e.key === STORAGE_KEY_QUEUE) {
+        try {
+          const nextQueue = e.newValue ? JSON.parse(e.newValue) : [];
+          setQueue(Array.isArray(nextQueue) ? nextQueue : []);
+        } catch {
+          setQueue([]);
+        }
+      } else if (e.key === STORAGE_KEY_HISTORY) {
+        try {
+          const nextHistory = e.newValue ? JSON.parse(e.newValue) : [];
+          setHistory(Array.isArray(nextHistory) ? nextHistory : []);
+        } catch {
+          setHistory([]);
+        }
+      }
+    };
+    window.addEventListener('storage', handleStorageSync);
+    return () => window.removeEventListener('storage', handleStorageSync);
+  }, []);
+
   // Listen for Navbar/Header floating player launcher & broadcast state
   useEffect(() => {
     const handleToggleFloating = () => {
-      setIsPipFloating((prev) => !prev);
+      setIsFloatingMode((prev) => !prev);
     };
     window.addEventListener('akari_toggle_floating_player', handleToggleFloating);
     return () => {
@@ -117,10 +191,10 @@ export const StudyAudioStudio: React.FC<StudyAudioStudioProps> = ({
   useEffect(() => {
     window.dispatchEvent(
       new CustomEvent('akari_floating_player_state', {
-        detail: { isOpen: isPipFloating, isPlaying }
+        detail: { isOpen: isFloatingMode, isPlaying }
       })
     );
-  }, [isPipFloating, isPlaying]);
+  }, [isFloatingMode, isPlaying]);
 
   // Sync portal target in the DOM
   useEffect(() => {
@@ -137,67 +211,7 @@ export const StudyAudioStudio: React.FC<StudyAudioStudioProps> = ({
     };
   }, [isInPomodoroWorkspace]);
 
-  // Synchronize the single permanent master iframe position over videoSlotRef when in Pomodoro view
-  const syncIframePosition = useCallback(() => {
-    const wrapper = iframeWrapperRef.current;
-    if (!wrapper) return;
-
-    const slot = videoSlotRef.current;
-    const isSlotActive =
-      isInPomodoroWorkspace && Boolean(portalTarget) && Boolean(slot) && Boolean(iframeConfig.youtubeId);
-
-    if (isSlotActive && slot) {
-      const rect = slot.getBoundingClientRect();
-      if (rect.width > 0 && rect.height > 0) {
-        wrapper.style.position = 'fixed';
-        wrapper.style.top = `${rect.top}px`;
-        wrapper.style.left = `${rect.left}px`;
-        wrapper.style.width = `${rect.width}px`;
-        wrapper.style.height = `${rect.height}px`;
-        wrapper.style.opacity = '1';
-        wrapper.style.pointerEvents = 'auto';
-        wrapper.style.zIndex = '20';
-        wrapper.style.borderRadius = '0.75rem';
-        wrapper.style.overflow = 'hidden';
-        return;
-      }
-    }
-
-    // Outside Pomodoro tab: keep the exact same iframe alive & hidden without unmounting
-    wrapper.style.position = 'fixed';
-    wrapper.style.top = '-9999px';
-    wrapper.style.left = '-9999px';
-    wrapper.style.width = '1px';
-    wrapper.style.height = '1px';
-    wrapper.style.opacity = '0';
-    wrapper.style.pointerEvents = 'none';
-    wrapper.style.zIndex = '-50';
-  }, [isInPomodoroWorkspace, portalTarget, iframeConfig.youtubeId]);
-
-  useEffect(() => {
-    syncIframePosition();
-    window.addEventListener('scroll', syncIframePosition, true);
-    window.addEventListener('resize', syncIframePosition);
-
-    let ro: ResizeObserver | null = null;
-    if (typeof ResizeObserver !== 'undefined' && videoSlotRef.current) {
-      ro = new ResizeObserver(syncIframePosition);
-      ro.observe(videoSlotRef.current);
-    }
-
-    const rafId = requestAnimationFrame(syncIframePosition);
-    const timerId = setTimeout(syncIframePosition, 100);
-
-    return () => {
-      window.removeEventListener('scroll', syncIframePosition, true);
-      window.removeEventListener('resize', syncIframePosition);
-      if (ro) ro.disconnect();
-      cancelAnimationFrame(rafId);
-      clearTimeout(timerId);
-    };
-  }, [syncIframePosition, activeTab, searchResults.length, pendingNavDirection]);
-
-  // Clear any legacy cached audio keys on initial mount so startup is always a pristine Zero-State
+  // Clean up deprecated legacy storage keys once on mount (while preserving akari_audio_queue & akari_audio_history)
   useEffect(() => {
     try {
       localStorage.removeItem('akari_music_queue');
@@ -270,11 +284,13 @@ export const StudyAudioStudio: React.FC<StudyAudioStudioProps> = ({
     cleanTracks();
   }, []);
 
-  // Record to History when a track is played
+  // Record to History when a track is played (avoid duplicates, prepend with timestamp, cap at 30)
   const recordToHistory = (track: MusicTrack) => {
+    const timestamp = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    const entry: MusicTrack = { ...track, playedAt: timestamp };
     setHistory((prev) => {
       const filtered = prev.filter((t) => t.youtubeId !== track.youtubeId);
-      return [track, ...filtered].slice(0, 30);
+      return [entry, ...filtered].slice(0, 30);
     });
     setCurrentHistoryIndex(0);
   };
@@ -734,15 +750,42 @@ export const StudyAudioStudio: React.FC<StudyAudioStudioProps> = ({
   };
 
   const removeFromQueue = (indexToRemove: number) => {
-    setQueue((prev) => prev.filter((_, idx) => idx !== indexToRemove));
+    setQueue((prev) => {
+      const next = prev.filter((_, idx) => idx !== indexToRemove);
+      if (next.length === 0) {
+        try {
+          localStorage.removeItem(STORAGE_KEY_QUEUE);
+        } catch {}
+      }
+      return next;
+    });
     if (indexToRemove === currentTrackIndex && queue.length > 1) {
       setCurrentTrackIndex(0);
+    }
+  };
+
+  const handleAddToQueue = (track: MusicTrack) => {
+    setQueue((prev) => {
+      if (prev.some((q) => q.youtubeId === track.youtubeId)) {
+        return prev;
+      }
+      return [...prev, track];
+    });
+    if (!activeTrack) {
+      setCurrentTrackIndex(0);
+      loadAndPlayTrack(track, true, false);
+      showToast(`➕ Queue ထဲသို့ ထည့်ပြီး စတင်ဖွင့်နေပါသည်: ${track.title}`);
+    } else {
+      showToast(`➕ Queue ထဲသို့ ထည့်ပြီးပါပြီ: ${track.title}`);
     }
   };
 
   const clearEntireQueue = () => {
     setQueue([]);
     setCurrentTrackIndex(0);
+    try {
+      localStorage.removeItem(STORAGE_KEY_QUEUE);
+    } catch {}
     // Keep current playback state untouched (do NOT pause if playing, and if paused keep clean)
     if (isPlayingRef.current) {
       sendPlayerCommand('playVideo');
@@ -752,7 +795,23 @@ export const StudyAudioStudio: React.FC<StudyAudioStudioProps> = ({
 
   const clearEntireHistory = () => {
     setHistory([]);
+    setCurrentHistoryIndex(0);
+    try {
+      localStorage.removeItem(STORAGE_KEY_HISTORY);
+    } catch {}
     showToast('နားထောင်ခဲ့သည့် History အားလုံးကို ရှင်းထုတ်ပြီးပါပြီခင်ဗျာ။');
+  };
+
+  const removeFromHistory = (indexToRemove: number) => {
+    setHistory((prev) => {
+      const next = prev.filter((_, idx) => idx !== indexToRemove);
+      if (next.length === 0) {
+        try {
+          localStorage.removeItem(STORAGE_KEY_HISTORY);
+        } catch {}
+      }
+      return next;
+    });
   };
 
   const formatTime = (seconds: number) => {
@@ -832,11 +891,14 @@ export const StudyAudioStudio: React.FC<StudyAudioStudioProps> = ({
     );
   };
 
+  // Whether the player is rendered in the floating mini-player vs docked in the card
+  const showFloatingPlayer = isFloatingMode || (!isInPomodoroWorkspace && Boolean(masterIframeSrc));
+
   // -------------------------------------------------------------
-  // MAIN STUDIO PANEL CONTENT (IN-APP)
+  // MAIN STUDIO PANEL CONTENT (IN-APP DOCKED CARD)
   // -------------------------------------------------------------
   const mainStudioContent = (
-    <div className="space-y-4">
+    <div className="relative w-full rounded-2xl border border-slate-800 bg-slate-900/80 p-4 md:p-5 overflow-hidden shadow-xl space-y-4">
       {/* Toast Notification */}
       {toastMessage && (
         <div className="p-2.5 rounded-xl bg-indigo-950/90 border border-indigo-700/80 text-indigo-200 text-xs text-center font-medium animate-in fade-in">
@@ -845,7 +907,7 @@ export const StudyAudioStudio: React.FC<StudyAudioStudioProps> = ({
       )}
 
       {/* 1. Header Toolbar */}
-      <div className="flex items-center justify-between p-3.5 rounded-2xl bg-[#090e1a] border border-slate-800">
+      <div className="flex flex-wrap items-center justify-between gap-2 p-3.5 rounded-2xl bg-[#090e1a] border border-slate-800">
         <div className="flex items-center gap-2 text-xs font-bold text-slate-200">
           <span className="text-amber-400">🎧</span>
           <span>STUDY AUDIO STUDIO</span>
@@ -853,28 +915,28 @@ export const StudyAudioStudio: React.FC<StudyAudioStudioProps> = ({
 
         <button
           type="button"
-          onClick={() => setIsPipFloating((prev) => !prev)}
+          onClick={() => setIsFloatingMode((prev) => !prev)}
           className={`px-3 py-1.5 text-xs font-bold rounded-xl border transition-all flex items-center gap-1.5 cursor-pointer ${
-            isPipFloating
+            isFloatingMode
               ? 'bg-indigo-600 text-white border-indigo-500 shadow'
               : 'bg-slate-900 border-slate-800 text-slate-300 hover:text-white'
           }`}
         >
           <span>🔲</span>
-          <span>{isPipFloating ? 'Floating Player ပိတ်မည်' : 'Floating Player ဖွင့်မည်'}</span>
+          <span>{isFloatingMode ? 'Floating Player ပိတ်မည်' : 'Floating Player ဖွင့်မည်'}</span>
         </button>
       </div>
 
-      {/* 2. Main Studio Panel */}
-      <div className="p-4 rounded-2xl bg-[#0b1222]/90 border border-slate-800 space-y-4">
+      {/* 2. Main Studio Inner Controls */}
+      <div className="w-full min-w-0 p-4 rounded-2xl bg-[#0b1222]/90 border border-slate-800 space-y-4 overflow-hidden">
         {/* Search Input */}
-        <form onSubmit={handleSearch} className="flex gap-2">
+        <form onSubmit={handleSearch} className="flex flex-col sm:flex-row gap-2 w-full">
           <input
             type="text"
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
             placeholder="အဆိုတော်၊ သီချင်းနာမည် ရိုက်ရှာပါ (မြန်မာ/English/မည်သည့်ဘာသာမဆို)"
-            className="flex-1 px-4 py-2.5 rounded-xl bg-slate-950 border border-slate-800 text-xs text-slate-200 placeholder-slate-500 focus:outline-none focus:border-rose-500"
+            className="flex-1 min-w-0 px-4 py-2.5 rounded-xl bg-slate-950 border border-slate-800 text-xs text-slate-200 placeholder-slate-500 focus:outline-none focus:border-rose-500"
           />
           <button
             type="submit"
@@ -887,7 +949,7 @@ export const StudyAudioStudio: React.FC<StudyAudioStudioProps> = ({
 
         {/* Search Results (Real YouTube Results with Thumbnails) */}
         {searchResults.length > 0 && (
-          <div className="p-3.5 rounded-xl bg-slate-950 border border-slate-800 space-y-2">
+          <div className="p-3.5 rounded-xl bg-slate-950 border border-slate-800 space-y-2 overflow-hidden">
             <div className="flex items-center justify-between pb-1 border-b border-slate-800">
               <span className="text-xs font-bold text-slate-300">
                 🔍 YouTube မှ ရှာဖွေတွေ့ရှိသော ရလဒ်များ ({searchResults.length}):
@@ -927,7 +989,7 @@ export const StudyAudioStudio: React.FC<StudyAudioStudioProps> = ({
                         ];
                         setQueue(updatedQueue);
                         setCurrentTrackIndex(0);
-                        loadAndPlayTrack(res, true, true);
+                        loadAndPlayTrack(res, true, false);
                         showToast(`▶ ဖွင့်နေပါသည်: ${res.title}`);
                       }}
                       className="px-2.5 py-1 rounded-lg bg-rose-600 text-white text-[10px] font-bold cursor-pointer hover:bg-rose-500"
@@ -936,15 +998,10 @@ export const StudyAudioStudio: React.FC<StudyAudioStudioProps> = ({
                     </button>
                     <button
                       type="button"
-                      onClick={() => {
-                        if (!queue.some((q) => q.youtubeId === res.youtubeId)) {
-                          setQueue((prev) => [...prev, res]);
-                        }
-                        showToast('Queue ထဲသို့ ထည့်ပြီးပါပြီခင်ဗျာ။');
-                      }}
+                      onClick={() => handleAddToQueue(res)}
                       className="px-2.5 py-1 rounded-lg bg-slate-800 text-slate-200 text-[10px] font-bold cursor-pointer hover:bg-slate-700"
                     >
-                      ➕ Queue
+                      + Queue
                     </button>
                   </div>
                 </div>
@@ -953,37 +1010,91 @@ export const StudyAudioStudio: React.FC<StudyAudioStudioProps> = ({
           </div>
         )}
 
-        {/* Presets */}
+        {/* Presets (Quick Tag Play + Queue) */}
         <div className="flex flex-wrap gap-2">
-          {PRESET_YOUTUBE_TRACKS.map((track) => (
-            <button
-              key={track.id}
-              type="button"
-              onClick={() => {
-                const idx = queue.findIndex((t) => t.youtubeId === track.youtubeId);
-                if (idx !== -1) {
-                  setCurrentTrackIndex(idx);
-                } else {
-                  setQueue([track, ...queue]);
-                  setCurrentTrackIndex(0);
-                }
-                loadAndPlayTrack(track, true, true);
-              }}
-              className={`px-3 py-1.5 rounded-xl border text-xs font-semibold transition-all cursor-pointer ${
-                activeTrack?.youtubeId === track.youtubeId
-                  ? 'bg-rose-950/70 border-rose-600 text-rose-300 shadow'
-                  : 'bg-slate-950 border-slate-800 text-slate-300 hover:border-slate-700'
-              }`}
-            >
-              {track.title}
-            </button>
-          ))}
+          {PRESET_YOUTUBE_TRACKS.map((track) => {
+            const isCurrent = activeTrack?.youtubeId === track.youtubeId;
+            return (
+              <div
+                key={track.id}
+                className={`inline-flex items-center rounded-xl border text-xs font-semibold overflow-hidden transition-all ${
+                  isCurrent
+                    ? 'bg-rose-950/70 border-rose-600 text-rose-300 shadow'
+                    : 'bg-slate-950 border-slate-800 text-slate-300 hover:border-slate-700'
+                }`}
+              >
+                <button
+                  type="button"
+                  onClick={() => {
+                    const idx = queue.findIndex((t) => t.youtubeId === track.youtubeId);
+                    if (idx !== -1) {
+                      setCurrentTrackIndex(idx);
+                    } else {
+                      setQueue((prev) => [track, ...prev]);
+                      setCurrentTrackIndex(0);
+                    }
+                    loadAndPlayTrack(track, true, false);
+                  }}
+                  className="px-3 py-1.5 hover:text-white transition-colors cursor-pointer"
+                  title="တိုက်ရိုက်ဖွင့်မည်"
+                >
+                  {track.title}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => handleAddToQueue(track)}
+                  className="px-2 py-1.5 border-l border-slate-800/80 bg-slate-900/70 hover:bg-indigo-600/40 text-slate-400 hover:text-indigo-200 text-[10px] font-bold transition-colors cursor-pointer"
+                  title="+ Queue စာရင်းထဲသို့ ထည့်မည်"
+                >
+                  + Queue
+                </button>
+              </div>
+            );
+          })}
         </div>
 
+        {/* 
+          STRICT 16:9 VIDEO PLAYER VIEWPORT WRAPPER (DOCKED VS FLOATING)
+          Locked inside parent card with relative w-full aspect-video overflow-hidden
+        */}
+        {masterIframeSrc && (
+          !showFloatingPlayer ? (
+            <div className="relative w-full aspect-video rounded-xl overflow-hidden bg-black shadow-inner border border-slate-800/80 my-3">
+              <div id="youtube-player" className="absolute inset-0 w-full h-full pointer-events-auto">
+                <iframe
+                  ref={masterIframeRef}
+                  key={iframeConfig.youtubeId}
+                  onLoad={subscribeToYouTubeTelemetry}
+                  src={masterIframeSrc}
+                  title={activeTrack ? activeTrack.title : 'Study Audio Studio'}
+                  className="w-full h-full object-cover border-0"
+                  allow="autoplay; encrypted-media; picture-in-picture"
+                  allowFullScreen
+                />
+              </div>
+            </div>
+          ) : (
+            <div className="relative w-full aspect-video rounded-xl overflow-hidden bg-slate-950/90 shadow-inner border border-indigo-500/40 my-3 flex flex-col items-center justify-center p-4 text-center gap-2.5">
+              <span className="text-2xl">🔲</span>
+              <p className="text-xs font-semibold text-indigo-300 max-w-md leading-relaxed">
+                Currently playing in floating mini-player (အောက်ခြေ floating window တွင် ဖွင့်ထားပါသည်)
+              </p>
+              <button
+                type="button"
+                onClick={() => setIsFloatingMode(false)}
+                className="px-3 py-1.5 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white text-[11px] font-bold shadow transition-all cursor-pointer flex items-center gap-1.5"
+              >
+                <span>↙</span>
+                <span>Dock back to card (ကတ်ထဲသို့ ပြန်ထည့်မည်)</span>
+              </button>
+            </div>
+          )
+        )}
+
         {/* Controls Bar & Real-Time Progress */}
-        <div className="p-4 rounded-xl bg-slate-950 border border-slate-800 space-y-3">
+        <div className="p-4 rounded-xl bg-slate-950 border border-slate-800 space-y-3 overflow-hidden">
           <div className="flex items-center justify-between gap-2">
-            <div className="flex items-center gap-2 truncate">
+            <div className="flex items-center gap-2 truncate min-w-0">
               <span
                 className={`w-2.5 h-2.5 rounded-full shrink-0 ${
                   isPlaying ? 'bg-rose-500 animate-pulse' : 'bg-slate-600'
@@ -1048,7 +1159,7 @@ export const StudyAudioStudio: React.FC<StudyAudioStudioProps> = ({
           {renderNavSourceChooser()}
 
           <div className="flex flex-wrap items-center justify-between gap-2 pt-1">
-            <div className="flex items-center gap-2">
+            <div className="flex flex-wrap items-center gap-2">
               <button
                 type="button"
                 onClick={() => handlePrevNextClick('prev')}
@@ -1060,12 +1171,7 @@ export const StudyAudioStudio: React.FC<StudyAudioStudioProps> = ({
 
               <button
                 type="button"
-                onClick={() => {
-                  if (!isPlaying && (activeTrack || queue.length > 0)) {
-                    setIsPipFloating(true);
-                  }
-                  togglePlayPause();
-                }}
+                onClick={togglePlayPause}
                 className="px-5 py-2 rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 font-extrabold text-xs shadow flex items-center gap-1.5 cursor-pointer"
               >
                 {isPlaying ? '⏸ Pause' : '▶ Play'}
@@ -1139,21 +1245,9 @@ export const StudyAudioStudio: React.FC<StudyAudioStudioProps> = ({
           </div>
         </div>
 
-        {/* 
-          IN-APP VIDEO SLOT ANCHOR
-          The single permanent master iframe at Root overlays this slot seamlessly when in Pomodoro view.
-          Because the iframe never unmounts or changes src on tab switches, returning to Pomodoro NEVER restarts the song!
-        */}
-        {iframeConfig.youtubeId && (
-          <div
-            ref={videoSlotRef}
-            className="w-full aspect-video rounded-xl overflow-hidden border border-slate-800 mt-2 bg-black shadow-lg"
-          />
-        )}
-
-        {/* QUEUE DRAWER (REORDER, CLEAR ALL & CLOSE) */}
+        {/* QUEUE DRAWER (PLAY, REORDER, REMOVE & CLEAR ALL) */}
         {activeTab === 'queue' && (
-          <div className="p-3.5 rounded-xl bg-slate-950 border border-slate-800 space-y-2 animate-in fade-in">
+          <div className="p-3.5 rounded-xl bg-slate-950 border border-slate-800 space-y-2 animate-in fade-in overflow-hidden">
             <div className="flex items-center justify-between pb-1.5 border-b border-slate-800">
               <span className="text-xs font-bold text-slate-200">
                 📑 သီချင်းစာရင်း (PLAYLIST QUEUE)
@@ -1185,7 +1279,7 @@ export const StudyAudioStudio: React.FC<StudyAudioStudioProps> = ({
                 {queue.map((track, idx) => (
                   <div
                     key={`${track.id}_${idx}`}
-                    className={`p-2 rounded-lg flex items-center justify-between text-xs transition-all ${
+                    className={`p-2 rounded-lg flex items-center justify-between gap-2 text-xs transition-all ${
                       activeTrack?.youtubeId === track.youtubeId && idx === currentTrackIndex
                         ? 'bg-rose-950/70 border border-rose-800 text-rose-200'
                         : 'bg-slate-900/50 text-slate-300'
@@ -1194,15 +1288,27 @@ export const StudyAudioStudio: React.FC<StudyAudioStudioProps> = ({
                     <span
                       onClick={() => {
                         setCurrentTrackIndex(idx);
-                        loadAndPlayTrack(track, true, true);
+                        loadAndPlayTrack(track, true, false);
                       }}
                       className="truncate cursor-pointer hover:underline font-medium flex-1 pr-2"
+                      title={track.title}
                     >
                       {idx + 1}. {track.title}
                     </span>
 
-                    {/* Reorder Buttons (▲ / ▼) & Remove */}
+                    {/* Play Directly, Reorder Buttons (▲ / ▼) & Remove [✕] */}
                     <div className="flex items-center gap-1 shrink-0">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setCurrentTrackIndex(idx);
+                          loadAndPlayTrack(track, true, false);
+                        }}
+                        className="px-2 py-0.5 rounded bg-rose-600/80 hover:bg-rose-500 text-white text-[10px] font-bold cursor-pointer"
+                        title="တိုက်ရိုက်ဖွင့်မည်"
+                      >
+                        ▶
+                      </button>
                       <button
                         type="button"
                         disabled={idx === 0}
@@ -1224,7 +1330,7 @@ export const StudyAudioStudio: React.FC<StudyAudioStudioProps> = ({
                       <button
                         type="button"
                         onClick={() => removeFromQueue(idx)}
-                        className="text-slate-500 hover:text-rose-400 px-1.5 font-bold cursor-pointer"
+                        className="text-slate-400 hover:text-rose-400 px-1.5 py-0.5 rounded bg-slate-900/80 hover:bg-rose-950/60 font-bold text-[10px] cursor-pointer"
                         title="ဖယ်ရှားမည်"
                       >
                         ✕
@@ -1237,9 +1343,9 @@ export const StudyAudioStudio: React.FC<StudyAudioStudioProps> = ({
           </div>
         )}
 
-        {/* LISTENING HISTORY DRAWER (CLEAR HISTORY & CLOSE) */}
+        {/* LISTENING HISTORY DRAWER (PLAY AGAIN, CLEAR HISTORY & CLOSE) */}
         {activeTab === 'history' && (
-          <div className="p-3.5 rounded-xl bg-slate-950 border border-slate-800 space-y-2 animate-in fade-in">
+          <div className="p-3.5 rounded-xl bg-slate-950 border border-slate-800 space-y-2 animate-in fade-in overflow-hidden">
             <div className="flex items-center justify-between pb-1.5 border-b border-slate-800">
               <span className="text-xs font-bold text-slate-200">
                 🕒 နားထောင်ခဲ့သည့် မှတ်တမ်းများ (HISTORY)
@@ -1250,7 +1356,7 @@ export const StudyAudioStudio: React.FC<StudyAudioStudioProps> = ({
                   onClick={clearEntireHistory}
                   className="text-[11px] text-rose-400 hover:underline font-semibold cursor-pointer"
                 >
-                  Clear History (မှတ်တမ်းဖျက်မည်)
+                  Clear History (မှတ်တမ်းအားလုံးဖျက်မည်)
                 </button>
                 <button
                   type="button"
@@ -1269,25 +1375,42 @@ export const StudyAudioStudio: React.FC<StudyAudioStudioProps> = ({
                 {history.map((item, i) => (
                   <div
                     key={`${item.youtubeId}_${i}`}
-                    className={`p-2 rounded-lg flex items-center justify-between text-xs transition-all ${
+                    className={`p-2 rounded-lg flex items-center justify-between gap-2 text-xs transition-all ${
                       activeTrack?.youtubeId === item.youtubeId
                         ? 'bg-amber-950/60 border border-amber-700/60 text-amber-200'
                         : 'bg-slate-900/60 text-slate-300'
                     }`}
                   >
-                    <span className="truncate flex-1 pr-2">
-                      {i + 1}. {item.title}
-                    </span>
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setCurrentHistoryIndex(i);
-                        loadAndPlayTrack(item, false, true);
-                      }}
-                      className="text-[10px] text-cyan-400 hover:underline font-bold cursor-pointer shrink-0"
-                    >
-                      ပြန်ဖွင့်မည်
-                    </button>
+                    <div className="flex items-center gap-2 min-w-0 flex-1 pr-2">
+                      <span className="truncate font-medium" title={item.title}>
+                        {i + 1}. {item.title}
+                      </span>
+                      {item.playedAt && (
+                        <span className="text-[10px] font-mono text-slate-500 shrink-0">
+                          ({item.playedAt})
+                        </span>
+                      )}
+                    </div>
+                    <div className="flex items-center gap-1.5 shrink-0">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setCurrentHistoryIndex(i);
+                          loadAndPlayTrack(item, false, false);
+                        }}
+                        className="px-2 py-0.5 rounded bg-cyan-950/80 border border-cyan-700/50 text-[10px] text-cyan-300 hover:bg-cyan-900/80 font-bold cursor-pointer"
+                      >
+                        ▶ Play Again (ပြန်ဖွင့်မည်)
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => removeFromHistory(i)}
+                        className="text-slate-400 hover:text-rose-400 px-1.5 py-0.5 rounded bg-slate-900/80 hover:bg-rose-950/60 font-bold text-[10px] cursor-pointer"
+                        title="မှတ်တမ်းမှ ဖယ်ရှားမည်"
+                      >
+                        ✕
+                      </button>
+                    </div>
                   </div>
                 ))}
               </div>
@@ -1298,44 +1421,226 @@ export const StudyAudioStudio: React.FC<StudyAudioStudioProps> = ({
     </div>
   );
 
-  return (
-    <>
-      {/* 
-        SINGLE PERMANENT MASTER YOUTUBE ENGINE
-        There is ONLY ONE iframe in the entire app, mounted here at Root outside createPortal.
-        - Its src (masterIframeSrc) ONLY changes when a new track ID is selected.
-        - When in Pomodoro Focus, iframeWrapperRef positions itself directly over videoSlotRef.
-        - When on Dashboard or any other tab, iframeWrapperRef hides off-screen without unmounting.
-        - Therefore, switching tabs or returning to Pomodoro Focus NEVER restarts or stutters the song!
-      */}
-      <div
-        ref={iframeWrapperRef}
-        style={{
-          position: 'fixed',
-          top: '-9999px',
-          left: '-9999px',
-          width: '1px',
-          height: '1px',
-          opacity: 0,
-          pointerEvents: 'none',
-          zIndex: -50
-        }}
-        className="bg-black"
-      >
-        {masterIframeSrc && (
-          <iframe
-            ref={masterIframeRef}
-            key={iframeConfig.youtubeId}
-            onLoad={subscribeToYouTubeTelemetry}
-            src={masterIframeSrc}
-            title={activeTrack ? activeTrack.title : 'Study Audio Studio'}
-            className="w-full h-full border-0"
-            allow="autoplay; encrypted-media; picture-in-picture"
-            allowFullScreen
-          />
+  // -------------------------------------------------------------
+  // FLOATING MINI-PLAYER (PORTALED TO DOCUMENT.BODY WHEN ACTIVE)
+  // -------------------------------------------------------------
+  const floatingMiniPlayer = showFloatingPlayer ? (
+    <div
+      ref={floatingPlayerRef}
+      className="fixed bottom-5 right-5 z-[9999] w-[320px] rounded-xl shadow-2xl border-2 border-indigo-500/50 bg-slate-950 overflow-hidden select-none"
+    >
+      {/* 16:9 Mini-Player Video Viewport with Header Overlay */}
+      <div className="relative w-full aspect-video bg-black overflow-hidden">
+        {/* Tiny Header Overlay inside Mini-Player */}
+        <div
+          onMouseDown={handleDragStart}
+          onTouchStart={handleDragStart}
+          style={{ touchAction: 'none' }}
+          className="absolute top-0 inset-x-0 z-20 px-2.5 py-1.5 bg-gradient-to-b from-slate-950/95 via-slate-950/75 to-transparent flex items-center justify-between gap-2"
+        >
+          <div className="flex items-center gap-1.5 min-w-0">
+            <span
+              className={`w-2 h-2 rounded-full shrink-0 ${
+                isPlaying ? 'bg-emerald-400 animate-pulse' : 'bg-slate-500'
+              }`}
+            />
+            <span
+              className="text-[11px] font-bold text-slate-100 truncate"
+              title={activeTrack ? activeTrack.title : 'Study Audio Studio'}
+            >
+              {activeTrack ? activeTrack.title : 'နားဆင်လိုသော တေးဂီတကို ရွေးချယ်ပါ'}
+            </span>
+          </div>
+
+          <div className="flex items-center gap-1 shrink-0">
+            <button
+              type="button"
+              onClick={() => {
+                setIsFloatingMode(false);
+                if (!isInPomodoroWorkspace && onNavigateToPomodoroTab) {
+                  onNavigateToPomodoroTab();
+                }
+              }}
+              className="px-2 py-0.5 rounded bg-indigo-600/90 hover:bg-indigo-500 text-white text-[10px] font-bold cursor-pointer shadow"
+              title="Dock back to Study Audio Studio card"
+            >
+              ↙
+            </button>
+            <button
+              type="button"
+              onClick={() => setIsFloatingMode(false)}
+              className="px-1.5 py-0.5 rounded bg-slate-900/90 hover:bg-rose-600 text-slate-200 hover:text-white text-[10px] font-bold cursor-pointer shadow"
+              title="Close Floating Player"
+            >
+              ✕
+            </button>
+          </div>
+        </div>
+
+        {/* Embedded Iframe or Idle Placeholder inside 16:9 Floating Viewport */}
+        {masterIframeSrc ? (
+          <div id="youtube-player" className="absolute inset-0 w-full h-full pointer-events-auto">
+            <iframe
+              ref={masterIframeRef}
+              key={iframeConfig.youtubeId}
+              onLoad={subscribeToYouTubeTelemetry}
+              src={masterIframeSrc}
+              title={activeTrack ? activeTrack.title : 'Study Audio Studio'}
+              className="w-full h-full object-cover border-0"
+              allow="autoplay; encrypted-media; picture-in-picture"
+              allowFullScreen
+            />
+          </div>
+        ) : (
+          <div className="absolute inset-0 flex flex-col items-center justify-center p-4 text-center">
+            <span className="text-xl mb-1">🎧</span>
+            <span className="text-[11px] text-slate-400">
+              နားဆင်လိုသော တေးဂီတကို ရွေးချယ်ပါ
+            </span>
+          </div>
         )}
       </div>
 
+      {/* Compact Mini-Player Transport & Sleep Timer Drawer */}
+      <div className="p-2.5 bg-slate-950 border-t border-slate-800/90 space-y-2">
+        {/* Progress Bar */}
+        <div className="space-y-1">
+          <div
+            onClick={handleSeekBarClick}
+            className="w-full bg-slate-800 h-1.5 rounded-full overflow-hidden cursor-pointer"
+          >
+            <div
+              className="bg-rose-600 h-full transition-all duration-300"
+              style={{ width: `${progressPercentage}%` }}
+            />
+          </div>
+          <div className="flex items-center justify-between text-[10px] font-mono text-slate-400">
+            <span>
+              ⏱️ {formatTime(currentTimeSec)} / {durationSec > 0 ? formatTime(durationSec) : '--:--'}
+            </span>
+            <button
+              type="button"
+              onClick={() => setShowTimerMenu((prev) => !prev)}
+              className={`px-1.5 py-0.5 rounded text-[10px] font-bold border transition-all flex items-center gap-1 cursor-pointer ${
+                sleepTimerSeconds !== null
+                  ? 'bg-amber-950/80 text-amber-300 border-amber-600/60 animate-pulse'
+                  : showTimerMenu
+                  ? 'bg-indigo-600 text-white border-indigo-500'
+                  : 'bg-slate-900 text-slate-400 border-slate-800 hover:text-slate-200'
+              }`}
+            >
+              <span>🌙</span>
+              <span>
+                {sleepTimerSeconds !== null
+                  ? `${Math.floor(sleepTimerSeconds / 60)}:${
+                      sleepTimerSeconds % 60 < 10 ? '0' : ''
+                    }${sleepTimerSeconds % 60}`
+                  : 'Timer'}
+              </span>
+            </button>
+          </div>
+        </div>
+
+        {renderNavSourceChooser()}
+
+        {showTimerMenu && (
+          <div className="p-2 rounded-xl bg-slate-900 border border-indigo-500/40 space-y-2 text-xs">
+            <div className="grid grid-cols-4 gap-1">
+              {[15, 30, 45, 60].map((m) => {
+                const isSelected = selectedTimerPreset === m && sleepTimerSeconds !== null;
+                return (
+                  <button
+                    key={m}
+                    type="button"
+                    onClick={() => selectSleepPreset(m)}
+                    className={`py-1 rounded text-[10px] font-bold border cursor-pointer ${
+                      isSelected
+                        ? 'bg-indigo-600 text-white border-indigo-400'
+                        : 'bg-slate-950 text-slate-300 border-slate-800'
+                    }`}
+                  >
+                    {m}m
+                  </button>
+                );
+              })}
+            </div>
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-1">
+                <button
+                  type="button"
+                  onClick={() => reduceSleepTime(5)}
+                  className="px-2 py-0.5 rounded bg-slate-950 text-slate-300 text-[10px] font-bold border border-slate-800 cursor-pointer"
+                >
+                  -5m
+                </button>
+                <button
+                  type="button"
+                  onClick={() => addSleepTime(5)}
+                  className="px-2 py-0.5 rounded bg-slate-950 text-slate-300 text-[10px] font-bold border border-slate-800 cursor-pointer"
+                >
+                  +5m
+                </button>
+              </div>
+              {sleepTimerSeconds !== null && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setSleepTimerSeconds(null);
+                    setSelectedTimerPreset(null);
+                  }}
+                  className="text-[10px] text-rose-400 hover:underline font-bold cursor-pointer"
+                >
+                  Reset
+                </button>
+              )}
+            </div>
+          </div>
+        )}
+
+        {/* Controls */}
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-1.5">
+            <button
+              type="button"
+              onClick={() => handlePrevNextClick('prev')}
+              className="p-1 rounded bg-slate-900 text-slate-300 text-xs cursor-pointer hover:bg-slate-800"
+            >
+              ⏮
+            </button>
+            <button
+              type="button"
+              onClick={togglePlayPause}
+              className="px-3 py-1 rounded-lg bg-amber-500 text-slate-950 font-bold text-xs cursor-pointer hover:bg-amber-400"
+            >
+              {isPlaying ? '⏸ Pause' : '▶ Play'}
+            </button>
+            <button
+              type="button"
+              onClick={() => handlePrevNextClick('next')}
+              className="p-1 rounded bg-slate-900 text-slate-300 text-xs cursor-pointer hover:bg-slate-800"
+            >
+              ⏭
+            </button>
+          </div>
+
+          <button
+            type="button"
+            onClick={() => setIsRepeatOne((prev) => !prev)}
+            className={`px-2 py-0.5 rounded text-[10px] font-bold border cursor-pointer ${
+              isRepeatOne
+                ? 'bg-amber-950 text-amber-300 border-amber-700'
+                : 'bg-slate-900 text-slate-400 border-slate-800'
+            }`}
+          >
+            🔁 {isRepeatOne ? '1' : 'Off'}
+          </button>
+        </div>
+      </div>
+    </div>
+  ) : null;
+
+  return (
+    <>
       {/* Render Main Studio Panel (Portaled into Pomodoro or in-line if in workspace) */}
       {portalTarget
         ? createPortal(mainStudioContent, portalTarget)
@@ -1343,301 +1648,10 @@ export const StudyAudioStudio: React.FC<StudyAudioStudioProps> = ({
         ? mainStudioContent
         : null}
 
-      {/* 3. ULTRA-SMOOTH DRAGGABLE FLOATING PIP PLAYER */}
-      {isPipFloating && (
-        <div
-          ref={floatingPlayerRef}
-          style={{
-            right: `${position.x}px`,
-            bottom: `${position.y}px`
-          }}
-          className={`fixed z-50 select-none ${
-            isDragging
-              ? 'transition-none shadow-2xl scale-[1.02]'
-              : 'transition-transform duration-75 shadow-xl'
-          } ${
-            isCollapsed ? 'w-auto' : 'w-72 md:w-80'
-          } bg-[#0c1324] border border-indigo-900/60 rounded-2xl backdrop-blur-md`}
-        >
-          {/* Header Bar */}
-          <div
-            onMouseDown={handleDragStart}
-            onTouchStart={handleDragStart}
-            style={{ touchAction: 'none' }}
-            className="p-2.5 border-b border-slate-800/80 flex items-center justify-between bg-slate-950/70 rounded-t-2xl cursor-grab active:cursor-grabbing"
-          >
-            <div className="flex items-center gap-1.5">
-              <span className="text-slate-400 text-xs">⋮⋮</span>
-              <button
-                type="button"
-                onMouseDown={(e) => e.stopPropagation()}
-                onTouchStart={(e) => e.stopPropagation()}
-                onClick={() => {
-                  if (onNavigateToPomodoroTab) onNavigateToPomodoroTab();
-                }}
-                className="px-2 py-0.5 rounded-lg bg-rose-950 text-rose-300 border border-rose-800/60 hover:bg-rose-900 text-[10px] font-bold flex items-center gap-1 cursor-pointer"
-              >
-                <span>⏱️</span>
-                <span>Pomodoro Tab ➔</span>
-              </button>
-            </div>
-
-            <div className="flex items-center gap-1">
-              <button
-                type="button"
-                onMouseDown={(e) => e.stopPropagation()}
-                onTouchStart={(e) => e.stopPropagation()}
-                onClick={() => setIsCollapsed(!isCollapsed)}
-                className="text-slate-400 hover:text-white px-1.5 py-0.5 text-xs font-bold cursor-pointer"
-                title={isCollapsed ? 'Expand' : 'Collapse'}
-              >
-                {isCollapsed ? '↗' : '—'}
-              </button>
-              <button
-                type="button"
-                onMouseDown={(e) => e.stopPropagation()}
-                onTouchStart={(e) => e.stopPropagation()}
-                onClick={() => setIsPipFloating(false)}
-                className="text-slate-400 hover:text-rose-400 px-1 text-xs font-bold cursor-pointer"
-              >
-                ✕
-              </button>
-            </div>
-          </div>
-
-          {/* Floating Body */}
-          <div className={`p-3 space-y-2.5 ${isCollapsed ? 'hidden' : 'block'}`}>
-            <div className="flex items-center justify-between">
-              <div className="flex items-center gap-2 truncate pr-2">
-                <span
-                  className={`w-2 h-2 rounded-full shrink-0 ${
-                    isPlaying ? 'bg-emerald-400 animate-pulse' : 'bg-slate-600'
-                  }`}
-                />
-                <span
-                  className="text-xs font-bold text-slate-100 truncate"
-                  title={activeTrack ? activeTrack.title : 'နားဆင်လိုသော တေးဂီတကို ရွေးချယ်ပါ'}
-                >
-                  {activeTrack ? activeTrack.title : 'နားဆင်လိုသော တေးဂီတကို ရွေးချယ်ပါ'}
-                </span>
-              </div>
-
-              <button
-                type="button"
-                onClick={() => setShowTimerMenu((prev) => !prev)}
-                className={`px-2 py-0.5 rounded-lg text-[10px] font-bold border transition-all flex items-center gap-1 shrink-0 cursor-pointer ${
-                  sleepTimerSeconds !== null
-                    ? 'bg-amber-950/80 text-amber-300 border-amber-600/60 animate-pulse'
-                    : showTimerMenu
-                    ? 'bg-indigo-600 text-white border-indigo-500'
-                    : 'bg-slate-900 text-slate-400 border-slate-800 hover:text-slate-200'
-                }`}
-              >
-                <span>🌙</span>
-                <span>
-                  {sleepTimerSeconds !== null
-                    ? `${Math.floor(sleepTimerSeconds / 60)}:${
-                        sleepTimerSeconds % 60 < 10 ? '0' : ''
-                      }${sleepTimerSeconds % 60}`
-                    : 'Timer'}
-                </span>
-              </button>
-            </div>
-
-            {/* Seekable Progress Bar & Real Time Indicator in Floating Player */}
-            <div className="space-y-1">
-              <div
-                onClick={handleSeekBarClick}
-                className="w-full bg-slate-800 h-1.5 rounded-full overflow-hidden cursor-pointer"
-              >
-                <div
-                  className="bg-rose-600 h-full transition-all duration-300"
-                  style={{ width: `${progressPercentage}%` }}
-                />
-              </div>
-              <div className="flex justify-between text-[10px] font-mono text-slate-400 px-0.5">
-                <span>
-                  ⏱️ {formatTime(currentTimeSec)} /{' '}
-                  {durationSec > 0 ? formatTime(durationSec) : '--:--'}
-                </span>
-                <span className="text-[9px] text-slate-500">
-                  {navSourceMode === 'queue'
-                    ? '📑 Queue'
-                    : navSourceMode === 'history'
-                    ? '🕒 History'
-                    : '⏮/⏭ Ask'}
-                </span>
-              </div>
-            </div>
-
-            {/* Queue vs History Navigation Chooser inside Floating Player */}
-            {renderNavSourceChooser()}
-
-            {/* Sleep Timer Drawer */}
-            {showTimerMenu && (
-              <div className="p-2.5 rounded-xl bg-slate-950 border border-indigo-500/40 space-y-2.5 text-xs shadow-lg">
-                <div className="flex items-center justify-between text-slate-200 font-semibold pb-1.5 border-b border-slate-800">
-                  <div className="flex items-center gap-1.5">
-                    <span>⏱️ Sleep Timer</span>
-                    {sleepTimerSeconds !== null && (
-                      <span className="px-1.5 py-0.5 rounded bg-amber-950/90 border border-amber-600/60 text-amber-300 font-mono text-[10px] font-bold">
-                        {Math.floor(sleepTimerSeconds / 60)}:
-                        {sleepTimerSeconds % 60 < 10 ? '0' : ''}
-                        {sleepTimerSeconds % 60}
-                      </span>
-                    )}
-                  </div>
-                  <div className="flex items-center gap-2">
-                    {sleepTimerSeconds !== null && (
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setSleepTimerSeconds(null);
-                          setSelectedTimerPreset(null);
-                        }}
-                        className="text-[10px] text-rose-400 hover:text-rose-300 hover:underline font-bold cursor-pointer"
-                      >
-                        Reset
-                      </button>
-                    )}
-                    <button
-                      type="button"
-                      onClick={() => setShowTimerMenu(false)}
-                      className="px-1.5 py-0.5 rounded bg-slate-900 hover:bg-slate-800 text-slate-300 hover:text-white text-[10px] font-bold border border-slate-700 cursor-pointer"
-                      title="Sleep Timer မှ ထွက်မည်"
-                    >
-                      ✕ ပိတ်မည်
-                    </button>
-                  </div>
-                </div>
-
-                <div className="grid grid-cols-4 gap-1.5">
-                  {[15, 30, 45, 60].map((m) => {
-                    const isSelected =
-                      selectedTimerPreset === m && sleepTimerSeconds !== null;
-                    return (
-                      <button
-                        key={m}
-                        type="button"
-                        onClick={() => selectSleepPreset(m)}
-                        className={`py-1.5 rounded-lg text-[10px] font-bold border transition-all cursor-pointer flex items-center justify-center gap-0.5 ${
-                          isSelected
-                            ? 'bg-indigo-600 text-white border-indigo-400 shadow-md ring-1 ring-indigo-400/60'
-                            : 'bg-slate-900 hover:bg-indigo-950/80 hover:border-indigo-500/60 text-slate-200 border-slate-800'
-                        }`}
-                      >
-                        {isSelected && <span>✓</span>}
-                        <span>{m}m</span>
-                      </button>
-                    );
-                  })}
-                </div>
-
-                <div className="flex items-center justify-between pt-0.5">
-                  <span className="text-[10px] text-slate-400">ချိန်ညှိမှု:</span>
-                  <div className="flex items-center gap-1.5">
-                    <button
-                      type="button"
-                      onClick={() => reduceSleepTime(5)}
-                      className="px-2.5 py-1 rounded-lg bg-slate-900 hover:bg-slate-800 active:bg-indigo-600 text-slate-200 text-[10px] font-bold border border-slate-800 cursor-pointer transition-all"
-                    >
-                      -5m
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => addSleepTime(5)}
-                      className="px-2.5 py-1 rounded-lg bg-slate-900 hover:bg-slate-800 active:bg-indigo-600 text-slate-200 text-[10px] font-bold border border-slate-800 cursor-pointer transition-all"
-                    >
-                      +5m
-                    </button>
-                  </div>
-                </div>
-
-                <div className="pt-1 border-t border-slate-800/80 flex items-center justify-end">
-                  <button
-                    type="button"
-                    onClick={() => setShowTimerMenu(false)}
-                    className={`w-full py-1.5 rounded-lg text-[11px] font-bold transition-all cursor-pointer flex items-center justify-center gap-1 ${
-                      sleepTimerSeconds !== null
-                        ? 'bg-emerald-600 hover:bg-emerald-500 text-white shadow'
-                        : 'bg-slate-800 hover:bg-slate-700 text-slate-200'
-                    }`}
-                  >
-                    {sleepTimerSeconds !== null ? (
-                      <>
-                        <span>✓</span>
-                        <span>ရွေးချယ်ပြီး ထွက်မည် ({Math.ceil(sleepTimerSeconds / 60)} မိနစ်)</span>
-                      </>
-                    ) : (
-                      <span>← Sleep Timer မှ ထွက်မည်</span>
-                    )}
-                  </button>
-                </div>
-              </div>
-            )}
-
-            {/* Controls */}
-            <div className="flex items-center justify-between pt-1">
-              <div className="flex items-center gap-1.5">
-                <button
-                  type="button"
-                  onClick={() => handlePrevNextClick('prev')}
-                  className="p-1 rounded bg-slate-900 text-slate-300 text-xs cursor-pointer hover:bg-slate-800"
-                >
-                  ⏮
-                </button>
-                <button
-                  type="button"
-                  onClick={togglePlayPause}
-                  className="px-3.5 py-1 rounded-lg bg-amber-500 text-slate-950 font-bold text-xs cursor-pointer hover:bg-amber-400"
-                >
-                  {isPlaying ? '⏸ Pause' : '▶ Play'}
-                </button>
-                <button
-                  type="button"
-                  onClick={() => handlePrevNextClick('next')}
-                  className="p-1 rounded bg-slate-900 text-slate-300 text-xs cursor-pointer hover:bg-slate-800"
-                >
-                  ⏭
-                </button>
-              </div>
-
-              <button
-                type="button"
-                onClick={() => setIsRepeatOne((prev) => !prev)}
-                className={`px-2 py-0.5 rounded text-[10px] font-bold border cursor-pointer ${
-                  isRepeatOne
-                    ? 'bg-amber-950 text-amber-300 border-amber-700'
-                    : 'bg-slate-900 text-slate-400 border-slate-800'
-                }`}
-              >
-                🔁 {isRepeatOne ? '1' : 'Off'}
-              </button>
-            </div>
-          </div>
-
-          {/* Collapsed View */}
-          {isCollapsed && (
-            <div
-              onClick={() => setIsCollapsed(false)}
-              className="px-3 py-1.5 text-xs text-slate-300 flex items-center gap-2 cursor-pointer hover:bg-slate-900 rounded-b-2xl"
-            >
-              <span
-                className={`w-2 h-2 rounded-full ${
-                  isPlaying ? 'bg-emerald-400 animate-pulse' : 'bg-slate-500'
-                }`}
-              />
-              <span className="truncate max-w-[140px] text-[11px] font-semibold">
-                {activeTrack ? activeTrack.title : 'Idle'}
-              </span>
-              <span className="text-[10px] font-mono text-cyan-400">
-                ⏱️ {formatTime(currentTimeSec)}
-              </span>
-              <span className="text-cyan-400 text-[10px] font-bold ml-auto">Expand ↗</span>
-            </div>
-          )}
-        </div>
-      )}
+      {/* Render Floating Mini-Player at Root via Portal */}
+      {typeof document !== 'undefined' && floatingMiniPlayer
+        ? createPortal(floatingMiniPlayer, document.body)
+        : floatingMiniPlayer}
     </>
   );
 };

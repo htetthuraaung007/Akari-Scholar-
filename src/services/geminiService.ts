@@ -395,38 +395,18 @@ export async function resolveDynamicModelCatalog(
       const usedKeyFingerprint = expectedFingerprint;
       const activeKey = candidateKeys[0] || '';
 
-      if (isAIStudioPreview()) {
-        const headers: Record<string, string> = { 'Content-Type': 'application/json' };
-        if (activeKey) {
-          headers['x-gemini-key'] = activeKey;
-          headers['x-goog-api-key'] = activeKey;
-        }
-        const res = await fetch('/api/academic/models', {
-          method: 'GET',
-          headers,
-        });
-        if (res.ok) {
-          const data = await res.json();
-          rawList = Array.isArray(data?.models) ? data.models : [];
-        }
-      } else if (activeKey) {
-        const controller = new AbortController();
-        const timeoutId = setTimeout(() => controller.abort(), 8000);
-        try {
-          const res = await fetch(
-            `https://generativelanguage.googleapis.com/v1beta/models?key=${encodeURIComponent(activeKey)}`,
-            {
-              method: 'GET',
-              signal: controller.signal,
-            }
-          );
-          if (res.ok) {
-            const data = await res.json();
-            rawList = Array.isArray(data?.models) ? data.models : [];
-          }
-        } finally {
-          clearTimeout(timeoutId);
-        }
+      const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+      if (activeKey) {
+        headers['x-gemini-key'] = activeKey;
+        headers['x-goog-api-key'] = activeKey;
+      }
+      const res = await fetch('/api/academic/models', {
+        method: 'GET',
+        headers,
+      });
+      if (res.ok) {
+        const data = await res.json();
+        rawList = Array.isArray(data?.models) ? data.models : [];
       }
 
       if (rawList.length > 0) {
@@ -604,14 +584,21 @@ export async function silentValidateStoredKeys(): Promise<Record<string, 'active
   await Promise.all(
     keys.map(async (key) => {
       try {
-        const res = await validateGeminiApiKey(key);
-        const status: 'active' | 'exhausted' | 'invalid' = res.success
-          ? 'active'
-          : res.httpStatus === 429
-          ? 'exhausted'
-          : res.httpStatus === 400 || res.httpStatus === 403
-          ? 'invalid'
-          : 'active';
+        const res = await fetch('/api/academic/validate-key', {
+          method: 'GET',
+          headers: {
+            'Content-Type': 'application/json',
+            'x-gemini-key': key,
+            'x-goog-api-key': key,
+          },
+        });
+        const data = await res.json().catch(() => null);
+        const status: 'active' | 'exhausted' | 'invalid' =
+          data?.status === 'exhausted' || res.status === 429
+            ? 'exhausted'
+            : data?.status === 'invalid' || res.status === 400 || res.status === 403
+            ? 'invalid'
+            : 'active';
         results[key] = status;
         localStorage.setItem(`key_status_${key.slice(-6)}`, status);
       } catch {
@@ -681,228 +668,85 @@ export function validateApiKey(apiKey?: string): string {
 }
 
 /**
- * Smart Hybrid Key Validation Function (`validateGeminiApiKey`)
- * - Sends a clean POST request to `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${apiKey.trim()}`
- *   (with automatic fallback to `gemini-2.5-flash` if 404).
- * - Handles HTTP 200, 400 ("Invalid API Key format [400]"), and 403 ("API Key forbidden or invalid location [403] - Check VPN").
- * - If it catches a TypeError / CORS / `PROXY_GENERATION_DISABLED` block inside AI Studio Preview,
- *   verifies standard Gemini key format (>35 chars, starts with `AIzaSy` or `AQ`) and allows it to Save & Activate
- *   with notice: `"Key format valid. Saved for Production."`
+ * Server-Side Key Validation Function (`validateGeminiApiKey`)
+ * Validates the user's or server's Gemini API key via the `/api/academic/health` server endpoint.
  */
 export async function validateGeminiApiKey(
   apiKey: string
 ): Promise<{ success: boolean; valid: boolean; message: string; latency?: number; httpStatus?: number }> {
   const trimmedKey = cleanGeminiKey((apiKey || '').trim());
-  if (!trimmedKey) {
+  const startTime = performance.now();
+
+  try {
+    const headers: Record<string, string> = {
+      'Content-Type': 'application/json',
+    };
+    if (trimmedKey) {
+      headers['x-gemini-key'] = trimmedKey;
+      headers['x-goog-api-key'] = trimmedKey;
+      headers['x-strict-key'] = '1';
+    }
+
+    const res = await fetch('/api/academic/health', {
+      method: 'GET',
+      headers,
+    });
+    const latency = Math.round(performance.now() - startTime);
+    const data = await res.json().catch(() => null);
+
+    if (res.ok && data?.healthy) {
+      if (trimmedKey && typeof window !== 'undefined') {
+        try {
+          localStorage.setItem(`key_status_${trimmedKey.slice(-6)}`, 'active');
+        } catch {}
+      }
+      void resolveDynamicModelCatalog(trimmedKey, true);
+      return {
+        success: true,
+        valid: true,
+        message: data.message || 'API Key verified and activated successfully!',
+        latency: data.latencyMs || latency,
+        httpStatus: 200,
+      };
+    }
+
+    const status = res.status || (data?.status === 'quota_exceeded' ? 429 : 400);
+    if (trimmedKey && typeof window !== 'undefined') {
+      try {
+        localStorage.setItem(
+          `key_status_${trimmedKey.slice(-6)}`,
+          status === 429 ? 'exhausted' : 'invalid'
+        );
+      } catch {}
+    }
+
     return {
       success: false,
       valid: false,
-      message: 'Invalid API Key format [400]',
-      httpStatus: 400,
+      message:
+        data?.message ||
+        (status === 403
+          ? 'API Key forbidden or invalid location [403] - Check VPN'
+          : status === 429
+          ? 'Quota exceeded [429] - Rate limit hit'
+          : 'Invalid API Key format [400]'),
+      latency: data?.latencyMs || latency,
+      httpStatus: status,
     };
-  }
-
-  const startTime = performance.now();
-  const probeModels = ['gemini-1.5-flash', 'gemini-2.5-flash'];
-  let lastStatus = 0;
-
-  for (let i = 0; i < probeModels.length; i++) {
-    const modelName = probeModels[i];
-    const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 10000);
-
-    try {
-      const res = await fetch(
-        `https://generativelanguage.googleapis.com/v1beta/models/${modelName}:generateContent?key=${encodeURIComponent(trimmedKey)}`,
-        {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-          },
-          body: JSON.stringify({
-            contents: [{ parts: [{ text: 'ping' }] }],
-          }),
-          signal: controller.signal,
-        }
-      );
-      clearTimeout(timeoutId);
-
-      const latency = Math.round(performance.now() - startTime);
-      lastStatus = res.status;
-
-      if (res.status === 200 || res.ok) {
-        if (typeof window !== 'undefined') {
-          try {
-            localStorage.setItem(`key_status_${trimmedKey.slice(-6)}`, 'active');
-          } catch {}
-        }
-        void resolveDynamicModelCatalog(trimmedKey, true);
-        return {
-          success: true,
-          valid: true,
-          message: 'API Key verified and activated successfully!',
-          latency,
-          httpStatus: 200,
-        };
-      }
-
-      const rawErrorText = await res.text().catch(() => '');
-      const isProxyBlock =
-        rawErrorText.includes('PROXY_GENERATION_DISABLED') ||
-        rawErrorText.includes('generateContent is not supported');
-
-      if (isProxyBlock) {
-        if (isValidGeminiKeyFormat(trimmedKey)) {
-          if (typeof window !== 'undefined') {
-            try {
-              localStorage.setItem(`key_status_${trimmedKey.slice(-6)}`, 'active');
-            } catch {}
-          }
-          return {
-            success: true,
-            valid: true,
-            message: 'Key format valid. Saved for Production.',
-            latency,
-            httpStatus: 200,
-          };
-        }
-        return {
-          success: false,
-          valid: false,
-          message: 'Invalid API Key format [400]',
-          latency,
-          httpStatus: 400,
-        };
-      }
-
-      // If 404 on gemini-1.5-flash, test gemini-2.5-flash before failing
-      if (res.status === 404 && i < probeModels.length - 1) {
-        continue;
-      }
-
-      if (res.status === 400) {
-        return {
-          success: false,
-          valid: false,
-          message: 'Invalid API Key format [400]',
-          latency,
-          httpStatus: 400,
-        };
-      }
-      if (res.status === 403) {
-        return {
-          success: false,
-          valid: false,
-          message: 'API Key forbidden or invalid location [403] - Check VPN',
-          latency,
-          httpStatus: 403,
-        };
-      }
-      if (res.status === 429) {
-        return {
-          success: false,
-          valid: false,
-          message: 'Quota exceeded [429] - Rate limit hit',
-          latency,
-          httpStatus: 429,
-        };
-      }
-
-      // If inside AI Studio preview and status is unexpected, check format fallback
-      if (isAIStudioPreview() && isValidGeminiKeyFormat(trimmedKey)) {
-        if (typeof window !== 'undefined') {
-          try {
-            localStorage.setItem(`key_status_${trimmedKey.slice(-6)}`, 'active');
-          } catch {}
-        }
-        return {
-          success: true,
-          valid: true,
-          message: 'Key format valid. Saved for Production.',
-          latency,
-          httpStatus: 200,
-        };
-      }
-
-      return {
-        success: false,
-        valid: false,
-        message: `Invalid API Key format [${res.status}]`,
-        latency,
-        httpStatus: res.status,
-      };
-    } catch (err: any) {
-      clearTimeout(timeoutId);
-      const latency = Math.round(performance.now() - startTime);
-      const errMsg = String(err?.message || err || '');
-      const isPreviewOrProxyError =
-        isAIStudioPreview() ||
-        err instanceof TypeError ||
-        errMsg.includes('PROXY_GENERATION_DISABLED') ||
-        errMsg.includes('generateContent is not supported') ||
-        errMsg.includes('Failed to fetch');
-
-      if (isPreviewOrProxyError && isValidGeminiKeyFormat(trimmedKey)) {
-        if (typeof window !== 'undefined') {
-          try {
-            localStorage.setItem(`key_status_${trimmedKey.slice(-6)}`, 'active');
-          } catch {}
-        }
-        return {
-          success: true,
-          valid: true,
-          message: 'Key format valid. Saved for Production.',
-          latency,
-          httpStatus: 200,
-        };
-      }
-
-      if (!isValidGeminiKeyFormat(trimmedKey) && isAIStudioPreview()) {
-        return {
-          success: false,
-          valid: false,
-          message: 'Invalid API Key format [400]',
-          latency,
-          httpStatus: 400,
-        };
-      }
-
-      return {
-        success: false,
-        valid: false,
-        message: 'Network connection error - Ensure VPN is active and stable',
-        latency,
-      };
-    }
-  }
-
-  if (isAIStudioPreview() && isValidGeminiKeyFormat(trimmedKey)) {
+  } catch {
+    const latency = Math.round(performance.now() - startTime);
     return {
-      success: true,
-      valid: true,
-      message: 'Key format valid. Saved for Production.',
-      httpStatus: 200,
+      success: false,
+      valid: false,
+      message: 'Network connection error - Ensure server is reachable',
+      latency,
     };
   }
-
-  return {
-    success: false,
-    valid: false,
-    message: lastStatus === 403
-      ? 'API Key forbidden or invalid location [403] - Check VPN'
-      : 'Invalid API Key format [400]',
-    httpStatus: lastStatus || 400,
-  };
 }
 
 /**
- * Smart Hybrid Dispatcher (`generateGeminiResponse`)
- * - Reads active key from `localStorage.getItem('akari_gemini_api_key_primary')`.
- * - On Vercel (`!isAIStudioPreview()`): Executes direct HTTPS POST to
- *   `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${activeKey}`
- *   with JSON body `{"contents": [{"parts": [{"text": prompt}]}]}`.
- * - Inside AI Studio Preview (`isAIStudioPreview()`): Routes via the server-side `@google/genai` SDK
- *   instance (`/api/academic/assist`) to avoid `PROXY_GENERATION_DISABLED`.
+ * Server-Side Gemini Dispatcher (`generateGeminiResponse`)
+ * Routes all generation requests through the server-side `/api/academic/assist` endpoint.
  */
 export async function generateGeminiResponse(
   prompt: string,
@@ -921,96 +765,31 @@ export async function generateGeminiResponse(
       getActiveApiKey()
   );
 
-  if (isAIStudioPreview()) {
-    const headers: Record<string, string> = { 'Content-Type': 'application/json' };
-    if (activeKey) {
-      headers['x-gemini-key'] = activeKey;
-      headers['x-goog-api-key'] = activeKey;
-    }
-    const res = await fetch('/api/academic/assist', {
-      method: 'POST',
-      headers,
-      body: JSON.stringify({
-        action: 'direct_assist',
-        payload: {
-          prompt,
-          systemInstruction: options?.systemInstruction,
-          temperature: options?.temperature,
-          maxOutputTokens: options?.maxOutputTokens,
-          responseMimeType: options?.responseMimeType,
-          images: options?.images,
-        },
-      }),
-    });
-    const data = await res.json().catch(() => null);
-    if (!res.ok || !data) {
-      throw new Error(data?.error || data?.message || `HTTP ${res.status}`);
-    }
-    return typeof data.result === 'string' ? data.result : JSON.stringify(data.result);
+  const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+  if (activeKey) {
+    headers['x-gemini-key'] = activeKey;
+    headers['x-goog-api-key'] = activeKey;
   }
-
-  if (!activeKey) {
-    throw new Error('Please enter and activate your Gemini API Key in the API Key Vault first.');
+  const res = await fetch('/api/academic/assist', {
+    method: 'POST',
+    headers,
+    body: JSON.stringify({
+      action: 'direct_assist',
+      payload: {
+        prompt,
+        systemInstruction: options?.systemInstruction,
+        temperature: options?.temperature,
+        maxOutputTokens: options?.maxOutputTokens,
+        responseMimeType: options?.responseMimeType,
+        images: options?.images,
+      },
+    }),
+  });
+  const data = await res.json().catch(() => null);
+  if (!res.ok || !data) {
+    throw new Error(data?.error || data?.message || `HTTP ${res.status}`);
   }
-
-  const candidateModels = ['gemini-1.5-flash', 'gemini-2.5-flash'];
-  let lastError: any = null;
-
-  for (let i = 0; i < candidateModels.length; i++) {
-    const model = candidateModels[i];
-    const parts: any[] = [];
-    if (Array.isArray(options?.images) && options.images.length > 0) {
-      for (const img of options.images) {
-        if (!img?.base64) continue;
-        const cleanBase64 = img.base64.includes('base64,')
-          ? img.base64.split('base64,')[1]
-          : img.base64;
-        parts.push({
-          inlineData: {
-            mimeType: img.mimeType || 'image/jpeg',
-            data: cleanBase64,
-          },
-        });
-      }
-    }
-    parts.push({ text: prompt });
-
-    const requestBody: Record<string, any> = {
-      contents: [{ parts }],
-    };
-    if (options?.systemInstruction) {
-      requestBody.systemInstruction = { parts: [{ text: options.systemInstruction }] };
-    }
-    if (options?.temperature !== undefined || options?.maxOutputTokens || options?.responseMimeType) {
-      requestBody.generationConfig = {
-        ...(options.temperature !== undefined ? { temperature: options.temperature } : {}),
-        ...(options.maxOutputTokens ? { maxOutputTokens: options.maxOutputTokens } : {}),
-        ...(options.responseMimeType ? { responseMimeType: options.responseMimeType } : {}),
-      };
-    }
-
-    const res = await fetch(
-      `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${encodeURIComponent(activeKey)}`,
-      {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(requestBody),
-      }
-    );
-
-    const data = await res.json().catch(() => null);
-    if (res.status === 404 && i < candidateModels.length - 1) {
-      continue;
-    }
-    if (!res.ok || !data) {
-      lastError = new Error(data?.error?.message || `HTTP ${res.status}`);
-      continue;
-    }
-    const text = data?.candidates?.[0]?.content?.parts?.map((p: any) => p?.text || '').join('') || '';
-    return text;
-  }
-
-  throw lastError || new Error('Failed to generate response from Gemini API.');
+  return typeof data.result === 'string' ? data.result : JSON.stringify(data.result);
 }
 
 /**
@@ -1934,17 +1713,10 @@ export async function executeAcademicActionWithCascade(options: DispatchOptions)
     appendKey(k, idx === 0 ? 'Primary Account Key' : idx === 1 ? 'Backup Account Key' : `Pool Account ${idx}`);
   });
 
-  const inPreviewEnv = isAIStudioPreview();
-  if (inPreviewEnv) {
-    // Allow fallback to AI Studio server environment key in preview mode
-    keyOrder.push({ key: '', label: 'Server Environment Key' });
-  } else if (keyOrder.length === 0) {
-    throw new Error(
-      'ကျေးဇူးပြု၍ Gemini API Key Vault (🔑 API Key ခလုတ်) တွင် သင်၏ Google AI Studio API Key ကို ဦးစွာ ထည့်သွင်းပေးပါ။ (Please enter your Gemini API Key in the API Key Vault first.)'
-    );
-  }
+  // Always allow fallback to server environment key so the app works for everyone who opens it
+  keyOrder.push({ key: '', label: 'Server Environment Key' });
 
-  // Resolve verified generateContent models once from memory cache / API
+  // Resolve verified generateContent models once from memory cache / server API
   await resolveDynamicModelCatalog(keyOrder[0]?.key || '');
 
   const resolvedComplexity = explicitComplexity || inferTaskComplexity(action, payload);
@@ -1969,24 +1741,6 @@ export async function executeAcademicActionWithCascade(options: DispatchOptions)
 
   const resolvedReq = resolveAcademicActionRequest(action, enrichedPayload, targetLanguage || 'both');
 
-  // Build Google REST generateContent request body for Vercel production
-  const parts: any[] = [];
-  if (Array.isArray(resolvedReq.images) && resolvedReq.images.length > 0) {
-    for (const img of resolvedReq.images) {
-      if (!img?.base64) continue;
-      const cleanBase64 = img.base64.includes('base64,')
-        ? img.base64.split('base64,')[1]
-        : img.base64;
-      parts.push({
-        inlineData: {
-          mimeType: img.mimeType || 'image/jpeg',
-          data: cleanBase64,
-        },
-      });
-    }
-  }
-  parts.push({ text: resolvedReq.prompt });
-
   const generationConfig: Record<string, any> = {
     temperature: resolvedReq.temperature ?? (resolvedComplexity === 'light' ? 0.2 : 0.45),
     maxOutputTokens: resolvedReq.maxOutputTokens || enrichedPayload.maxOutputTokens,
@@ -1995,21 +1749,11 @@ export async function executeAcademicActionWithCascade(options: DispatchOptions)
     generationConfig.responseMimeType = resolvedReq.responseMimeType;
   }
 
-  const requestBody: Record<string, any> = {
-    contents: [{ parts }],
-    generationConfig,
-  };
-  if (resolvedReq.systemInstruction) {
-    requestBody.systemInstruction = {
-      parts: [{ text: resolvedReq.systemInstruction }],
-    };
-  }
-
   let finalError: any = null;
   let authErrorCycleCount = 0;
   const sessionDeadModels = new Set<string>();
 
-  // LAYER 2 (KEY CASCADE): Iterate sequentially across Primary -> Backup -> Multi-Account Pool
+  // LAYER 2 (KEY CASCADE): Iterate sequentially across Primary -> Backup -> Multi-Account Pool -> Server Key
   for (let keyIdx = 0; keyIdx < keyOrder.length; keyIdx++) {
     if (signal?.aborted) {
       throw new DOMException('Request aborted', 'AbortError');
@@ -2017,7 +1761,6 @@ export async function executeAcademicActionWithCascade(options: DispatchOptions)
 
     const activeKeyEntry = keyOrder[keyIdx];
     const cleanKey = cleanGeminiKey(activeKeyEntry.key);
-    if (!inPreviewEnv && !cleanKey) continue;
 
     // Skip keys already confirmed invalid (400/403) if other keys remain
     if (cleanKey && keyIdx < keyOrder.length - 1 && typeof window !== 'undefined') {
@@ -2039,13 +1782,7 @@ export async function executeAcademicActionWithCascade(options: DispatchOptions)
     }
 
     const activeChain = modelChain.filter((m) => !sessionDeadModels.has(m));
-    const effectiveChain = inPreviewEnv
-      ? activeChain.length > 0
-        ? activeChain
-        : ['auto']
-      : activeChain.length > 0
-      ? Array.from(new Set(['gemini-1.5-flash', ...activeChain, 'gemini-2.5-flash']))
-      : ['gemini-1.5-flash', 'gemini-2.5-flash', 'gemini-2.5-flash-lite'];
+    const effectiveChain = activeChain.length > 0 ? activeChain : ['auto'];
 
     // LAYER 1 (MODEL CASCADE)
     for (let modelIdx = 0; modelIdx < effectiveChain.length; modelIdx++) {
@@ -2054,220 +1791,82 @@ export async function executeAcademicActionWithCascade(options: DispatchOptions)
       }
 
       const rawModel = effectiveChain[modelIdx];
-      const currentModel = rawModel === 'auto' ? 'gemini-1.5-flash' : rawModel.replace(/^models\//, '');
+      const currentModel = rawModel === 'auto' ? 'gemini-2.5-flash' : rawModel.replace(/^models\//, '');
 
       try {
-        // SMART HYBRID DISPATCHER:
-        // 1) Inside AI Studio Preview: Use server-side @google/genai SDK route to avoid PROXY_GENERATION_DISABLED
-        // 2) On Vercel Production (!isAIStudioPreview()): Execute direct HTTPS POST to generativelanguage.googleapis.com
-        if (inPreviewEnv) {
-          const headers: Record<string, string> = {
-            'Content-Type': 'application/json',
-          };
-          if (cleanKey) {
-            headers['x-gemini-key'] = cleanKey;
-            headers['x-goog-api-key'] = cleanKey;
-          }
-
-          const previewRes = await fetch('/api/academic/assist', {
-            method: 'POST',
-            headers,
-            signal,
-            body: JSON.stringify({
-              action: 'direct_assist',
-              payload: {
-                prompt: resolvedReq.prompt,
-                systemInstruction: resolvedReq.systemInstruction,
-                temperature: generationConfig.temperature,
-                maxOutputTokens: generationConfig.maxOutputTokens,
-                responseMimeType: resolvedReq.responseMimeType,
-                images: resolvedReq.images,
-              },
-              targetLanguage,
-              model: rawModel,
-              strictModel: rawModel !== 'auto',
-            }),
-          });
-
-          const previewData = await previewRes.json().catch(() => null);
-          if (previewRes.ok && previewData && previewData.result !== undefined) {
-            if (cleanKey && typeof window !== 'undefined') {
-              try {
-                localStorage.setItem(`key_status_${cleanKey.slice(-6)}`, 'active');
-              } catch {}
-            }
-            incrementDailyUsage(1200);
-            if (previewData.modelUsed || modelIdx > 0 || keyIdx > 0) {
-              onCascadeToast?.(
-                '⚡ Completed via Intelligent Auto-Cascade',
-                previewData.modelUsed || currentModel
-              );
-            }
-            return previewData.result;
-          }
-
-          const previewErrMsg = String(previewData?.error || previewData?.message || `HTTP ${previewRes.status}`);
-          if (previewRes.status === 404 || previewData?.status === 'model_unavailable') {
-            sessionDeadModels.add(rawModel);
-            markModelUnavailable(rawModel);
-          }
-          finalError = new Error(previewErrMsg);
-          if (modelIdx < effectiveChain.length - 1) {
-            await new Promise((r) => setTimeout(r, 300));
-            continue;
-          }
-          if (keyIdx < keyOrder.length - 1) {
-            break;
-          }
-          throw finalError;
+        const headers: Record<string, string> = {
+          'Content-Type': 'application/json',
+        };
+        if (cleanKey) {
+          headers['x-gemini-key'] = cleanKey;
+          headers['x-goog-api-key'] = cleanKey;
         }
 
-        // VERCEL PRODUCTION: Direct HTTPS POST to Google Gemini REST API
-        const response = await fetch(
-          `https://generativelanguage.googleapis.com/v1beta/models/${currentModel}:generateContent?key=${encodeURIComponent(cleanKey)}`,
-          {
-            method: 'POST',
-            headers: {
-              'Content-Type': 'application/json',
+        const serverRes = await fetch('/api/academic/assist', {
+          method: 'POST',
+          headers,
+          signal,
+          body: JSON.stringify({
+            action: 'direct_assist',
+            payload: {
+              prompt: resolvedReq.prompt,
+              systemInstruction: resolvedReq.systemInstruction,
+              temperature: generationConfig.temperature,
+              maxOutputTokens: generationConfig.maxOutputTokens,
+              responseMimeType: resolvedReq.responseMimeType,
+              images: resolvedReq.images,
             },
-            signal,
-            body: JSON.stringify(requestBody),
-          }
-        );
+            targetLanguage,
+            model: rawModel,
+            strictModel: rawModel !== 'auto',
+          }),
+        });
 
-        let rawText = '';
-        try {
-          rawText = await response.text();
-        } catch {
-          rawText = '';
+        const serverData = await serverRes.json().catch(() => null);
+        if (serverRes.ok && serverData && serverData.result !== undefined) {
+          if (cleanKey && typeof window !== 'undefined') {
+            try {
+              localStorage.setItem(`key_status_${cleanKey.slice(-6)}`, 'active');
+            } catch {}
+          }
+          incrementDailyUsage(1200);
+          if (serverData.modelUsed || modelIdx > 0 || keyIdx > 0) {
+            onCascadeToast?.(
+              '⚡ Completed via Intelligent Auto-Cascade',
+              serverData.modelUsed || currentModel
+            );
+          }
+          return serverData.result;
         }
 
-        let parsedData: any = null;
-        if (rawText && !rawText.trim().startsWith('<')) {
-          try {
-            parsedData = JSON.parse(rawText);
-          } catch {
-            parsedData = null;
-          }
+        const serverErrMsg = String(serverData?.error || serverData?.message || `HTTP ${serverRes.status}`);
+        if (serverRes.status === 404 || serverData?.status === 'model_unavailable') {
+          sessionDeadModels.add(rawModel);
+          markModelUnavailable(rawModel);
         }
-
-        if (!response.ok || !parsedData) {
-          const googleErrMsg =
-            parsedData?.error?.message ||
-            parsedData?.error ||
-            parsedData?.message ||
-            (rawText.trim().startsWith('<') ? 'Service busy' : rawText) ||
-            `HTTP ${response.status}`;
-          const msgStr = typeof googleErrMsg === 'string' ? googleErrMsg : JSON.stringify(googleErrMsg);
-
-          const isInvalidKey =
-            (response.status === 400 && (msgStr.includes('API key not valid') || msgStr.includes('API_KEY_INVALID'))) ||
-            response.status === 401 ||
-            response.status === 403 ||
-            msgStr.includes('API key not valid') ||
-            msgStr.includes('API_KEY_INVALID') ||
-            msgStr.includes('PERMISSION_DENIED');
-
-          if (isInvalidKey) {
-            finalError = new Error(
-              response.status === 403
-                ? 'API Key forbidden or invalid location [403] - Check VPN'
-                : 'Invalid API Key format [400]'
-            );
-            authErrorCycleCount++;
-            if (typeof window !== 'undefined') {
-              try {
-                localStorage.setItem(`key_status_${cleanKey.slice(-6)}`, 'invalid');
-              } catch {}
-            }
-            if (keyIdx < keyOrder.length - 1) {
-              break;
-            }
-            if (authErrorCycleCount > 0) {
-              invalidateDynamicModelCatalog();
-            }
-            throw finalError;
+        if (serverRes.status === 400 || serverRes.status === 401 || serverRes.status === 403) {
+          authErrorCycleCount++;
+          if (cleanKey && typeof window !== 'undefined') {
+            try {
+              localStorage.setItem(`key_status_${cleanKey.slice(-6)}`, 'invalid');
+            } catch {}
           }
-
-          if (response.status === 404) {
-            sessionDeadModels.add(currentModel);
-            markModelUnavailable(currentModel);
-          }
-
-          const isRetryableModelFailure =
-            response.status === 429 ||
-            response.status === 503 ||
-            response.status === 504 ||
-            response.status === 404 ||
-            msgStr.includes('429') ||
-            msgStr.includes('503') ||
-            msgStr.includes('504') ||
-            msgStr.includes('DEADLINE_EXCEEDED') ||
-            msgStr.toLowerCase().includes('timeout') ||
-            msgStr.toLowerCase().includes('timed out') ||
-            msgStr.includes('RESOURCE_EXHAUSTED') ||
-            msgStr.toLowerCase().includes('quota') ||
-            msgStr.toLowerCase().includes('overloaded');
-
-          if (isRetryableModelFailure) {
-            finalError = new Error(
-              response.status === 429
-                ? 'Quota exceeded [429] - Rate limit hit'
-                : response.status === 404
-                ? 'Model endpoint not found [404] - Verify model name'
-                : msgStr
-            );
-            const nextModel = effectiveChain[modelIdx + 1];
-
-            if (nextModel) {
-              await new Promise((r) => setTimeout(r, 300));
-              continue;
-            } else {
-              if (typeof window !== 'undefined') {
-                try {
-                  localStorage.setItem(`key_status_${cleanKey.slice(-6)}`, 'exhausted');
-                } catch {}
-              }
-              break;
-            }
-          }
-
-          finalError = new Error(msgStr);
-          if (modelIdx < effectiveChain.length - 1) {
-            await new Promise((r) => setTimeout(r, 300));
-            continue;
-          }
+          finalError = new Error(serverErrMsg);
           if (keyIdx < keyOrder.length - 1) {
             break;
           }
           throw finalError;
         }
 
-        const candidateParts = parsedData?.candidates?.[0]?.content?.parts;
-        const extractedText = Array.isArray(candidateParts)
-          ? candidateParts.map((p: any) => p?.text || '').join('')
-          : '';
-
-        if (!extractedText && parsedData?.promptFeedback?.blockReason) {
-          throw new Error(`Response blocked by safety filter: ${parsedData.promptFeedback.blockReason}`);
+        finalError = new Error(serverErrMsg);
+        if (modelIdx < effectiveChain.length - 1) {
+          await new Promise((r) => setTimeout(r, 300));
+          continue;
         }
-
-        if (typeof window !== 'undefined') {
-          try {
-            localStorage.setItem(`key_status_${cleanKey.slice(-6)}`, 'active');
-          } catch {}
+        if (keyIdx < keyOrder.length - 1) {
+          break;
         }
-
-        incrementDailyUsage(1200);
-
-        if (modelIdx > 0 || keyIdx > 0) {
-          onCascadeToast?.(
-            '⚡ Completed via Intelligent Auto-Cascade',
-            currentModel
-          );
-        }
-
-        return extractedText;
+        throw finalError;
       } catch (err: any) {
         if (signal?.aborted || err?.name === 'AbortError') {
           throw err;
@@ -2534,38 +2133,18 @@ export async function streamAcademicContent(
       getActiveApiKey()
   );
 
-  let response: Response;
-  if (isAIStudioPreview()) {
-    const headers: Record<string, string> = {
-      'Content-Type': 'application/json',
-    };
-    if (cleanKey) {
-      headers['x-gemini-key'] = cleanKey;
-      headers['x-goog-api-key'] = cleanKey;
-    }
-    response = await fetch('/api/academic/stream', {
-      method: 'POST',
-      headers,
-      body: JSON.stringify({ prompt }),
-    });
-  } else {
-    if (!cleanKey) {
-      throw new Error('Please configure your Gemini API Key in the API Key Vault.');
-    }
-    const model = getModelCascade('standard')[0] || 'gemini-2.5-flash';
-    response = await fetch(
-      `https://generativelanguage.googleapis.com/v1beta/models/${model}:streamGenerateContent?alt=sse&key=${encodeURIComponent(cleanKey)}`,
-      {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          contents: [{ parts: [{ text: prompt }] }],
-        }),
-      }
-    );
+  const headers: Record<string, string> = {
+    'Content-Type': 'application/json',
+  };
+  if (cleanKey) {
+    headers['x-gemini-key'] = cleanKey;
+    headers['x-goog-api-key'] = cleanKey;
   }
+  const response = await fetch('/api/academic/stream', {
+    method: 'POST',
+    headers,
+    body: JSON.stringify({ prompt }),
+  });
 
   if (!response.ok || !response.body) {
     const errText = await response.text();

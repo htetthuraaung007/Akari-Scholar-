@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { AppProvider, useApp } from './context/AppContext';
-import { ApiProvider } from './context/ApiContext';
+import { ApiProvider, useApi } from './context/ApiContext';
 import { AuthProvider, useAuth } from './context/AuthContext';
 import { StreakProvider } from './context/StreakContext';
 import { Navbar } from './components/Navbar';
@@ -42,6 +42,8 @@ const PRIMARY_NAV_ITEMS: { id: MainTabType; label: string; icon: string }[] = [
 
 const MainLayout: React.FC = () => {
   const { activeTab, setActiveTab, language, settings, eyecareMode } = useApp();
+  const { activeKey, primaryApiKey } = useApi();
+  const hasActiveKey = Boolean(activeKey || primaryApiKey || settings.customGeminiKey);
   const [activeWorkspace, setActiveWorkspace] = useState<string | null>(() => localStorage.getItem('akari_active_workspace'));
   const [lastSelectedCardId, setLastSelectedCardId] = useState<string | null>(null);
   const [assignmentInitialModule, setAssignmentInitialModule] = useState<
@@ -268,7 +270,7 @@ const MainLayout: React.FC = () => {
 
   return (
     <div
-      className={`min-h-screen flex flex-col bg-[#070b14] text-slate-100 font-sans selection:bg-indigo-500 selection:text-white ${
+      className={`min-h-screen w-full overflow-x-hidden flex flex-col bg-[#070b14] text-slate-100 font-sans selection:bg-indigo-500 selection:text-white ${
         eyecareMode ? 'eyecare-mode' : ''
       } ${settings.dataSaverMode ? 'subpixel-antialiased' : 'antialiased'}`}
     >
@@ -337,9 +339,22 @@ const MainLayout: React.FC = () => {
 
       {/* Floating Offline Notification when internet drops */}
       {!isOnline && (
-        <div className="fixed bottom-4 left-4 z-50 flex items-center space-x-2 px-3.5 py-2 rounded-xl bg-amber-600 text-white text-xs font-semibold shadow-2xl animate-bounce">
+        <div className="fixed bottom-16 left-4 z-50 flex items-center space-x-2 px-3.5 py-2 rounded-xl bg-amber-600 text-white text-xs font-semibold shadow-2xl animate-bounce">
           <WifiOff className="w-4 h-4" />
           <span>{t.offlineStatus}</span>
+        </div>
+      )}
+
+      {/* Floating Quick-Action Bottom Access when no Primary API Key is saved */}
+      {!hasActiveKey && (
+        <div className="fixed bottom-4 inset-x-3 sm:inset-x-auto sm:right-6 z-40 flex justify-center pointer-events-none">
+          <button
+            type="button"
+            onClick={() => setPrivacyModalOpen(true)}
+            className="pointer-events-auto min-h-[44px] px-4 py-2.5 rounded-2xl bg-slate-900/95 hover:bg-slate-800 border border-amber-500/60 text-amber-200 shadow-2xl shadow-black/80 backdrop-blur-md flex items-center justify-center gap-2 text-xs sm:text-sm font-bold transition-all active:scale-95 cursor-pointer"
+          >
+            <span>⚠️ Gemini API Key မထည့်ရသေးပါ - နှိပ်၍ထည့်ရန်</span>
+          </button>
         </div>
       )}
 
