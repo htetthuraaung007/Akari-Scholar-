@@ -1,0 +1,802 @@
+// /src/components/AssignmentWorkspace.tsx
+import React, { useState } from 'react';
+
+type AssignmentSubModule = 
+  | 'outline' 
+  | 'draft_audit' 
+  | 'discussion_studio' 
+  | 'paraphraser' 
+  | 'emergency_rescuer';
+
+type OutlineSubTab = 'outline_mode' | 'turnitin_integrity';
+
+const VERIFIED_FLASH_MODELS = [
+  'gemini-3.5-flash-lite',
+  'gemini-3.1-flash-lite',
+  'gemini-flash-lite-latest',
+  'gemini-3-flash-preview',
+  'gemini-3.6-flash',
+  'gemini-3.8-flash',
+  'gemini-flash-latest'
+];
+
+export const AssignmentWorkspace: React.FC<{ onBackToDashboard?: () => void }> = ({ onBackToDashboard }) => {
+  const [activeModule, setActiveModule] = useState<AssignmentSubModule>('outline');
+
+  // Shared Global UI States
+  const [loading, setLoading] = useState(false);
+  const [copied, setCopied] = useState(false);
+
+  // Moodle Sanitizer Toggle (Global ON/OFF)
+  const [moodleCleanerActive, setMoodleCleanerActive] = useState<boolean>(true);
+
+  // =========================================================
+  // MODULE 1: OUTLINE & TURNITIN INTEGRITY (WITH 10-YEAR CITATION AUDIT)
+  // =========================================================
+  const [outlineSubTab, setOutlineSubTab] = useState<OutlineSubTab>('outline_mode');
+  const [outlineInput, setOutlineInput] = useState('');
+  const [uploadedImages, setUploadedImages] = useState<{ name: string; dataUrl: string }[]>([]);
+  const [outlineResult, setOutlineResult] = useState('');
+  
+  // Turnitin & 10-Year Outdated Reference Audit States
+  const [integrityInput, setIntegrityInput] = useState('');
+  const [integrityResult, setIntegrityResult] = useState('');
+
+  // History Tracking
+  const [historyItems, setHistoryItems] = useState<string[]>(() => {
+    try {
+      return JSON.parse(localStorage.getItem('akari_outline_history') || '[]');
+    } catch {
+      return [];
+    }
+  });
+  const [showHistoryModal, setShowHistoryModal] = useState(false);
+
+  // =========================================================
+  // MODULE 2: DRAFT AUDIT (DIRECTLY LINKED WITH MODULE 1 OUTLINE CONTEXT)
+  // =========================================================
+  const [draftInput, setDraftInput] = useState('');
+  const [draftAuditResult, setDraftAuditResult] = useState('');
+
+  // =========================================================
+  // MODULE 3: DISCUSSION STUDIO
+  // =========================================================
+  const [discussionMode, setDiscussionMode] = useState<'peer' | 'followup'>('peer');
+  const [unitTopic, setUnitTopic] = useState('');
+  const [classmatePost, setClassmatePost] = useState('');
+  const [discussionResult, setDiscussionResult] = useState('');
+
+  // =========================================================
+  // MODULE 4: PARAPHRASER & DEPTH CONTROLLER
+  // =========================================================
+  const [paraphraseText, setParaphraseText] = useState('');
+  const [paraphraseDepth, setParaphraseDepth] = useState<'standard' | 'deep' | 'academic'>('academic');
+  const [paraphraseResult, setParaphraseResult] = useState('');
+
+  // =========================================================
+  // MODULE 5: EMERGENCY 1-HOUR ASSIGNMENT RESCUER
+  // =========================================================
+  const [emergencyTopic, setEmergencyTopic] = useState('');
+  const [emergencyResult, setEmergencyResult] = useState('');
+
+  // Universal Gemini Flash Engine
+  const callGemini = async (prompt: string, maxTokens: number = 850, imagePayload?: { name: string; dataUrl: string }[]) => {
+    const apiKey = localStorage.getItem('akari_gemini_api_key_primary') || '';
+    if (!apiKey.trim()) {
+      alert('Gemini API Key Vault တွင် Key ဦးစွာ ထည့်သွင်းပေးပါခင်ဗျာ။');
+      return '';
+    }
+
+    setLoading(true);
+    let resultText = '';
+
+    for (const model of VERIFIED_FLASH_MODELS) {
+      try {
+        const parts: any[] = [];
+        if (imagePayload && imagePayload.length > 0) {
+          imagePayload.forEach((img) => {
+            const base64Data = img.dataUrl.split(',')[1];
+            const mimeType = img.dataUrl.split(';')[0].split(':')[1] || 'image/jpeg';
+            if (base64Data) {
+              parts.push({
+                inlineData: { mimeType, data: base64Data }
+              });
+            }
+          });
+        }
+        parts.push({ text: prompt });
+
+        const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey.trim()}`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            contents: [{ role: 'user', parts }],
+            generationConfig: {
+              temperature: 0.25,
+              maxOutputTokens: maxTokens
+            }
+          })
+        });
+
+        if (!res.ok) continue;
+        const data = await res.json();
+        const text = data.candidates?.[0]?.content?.parts?.[0]?.text;
+        if (text) {
+          resultText = text.trim();
+          break;
+        }
+      } catch {}
+    }
+
+    setLoading(false);
+    return resultText;
+  };
+
+  // Moodle Cleaner Engine
+  const cleanMoodleText = (raw: string) => {
+    if (!moodleCleanerActive) return raw;
+    return raw
+      .replace(/[\u200B-\u200D\uFEFF]/g, '') // Zero-width spaces
+      .replace(/[\u2018\u2019]/g, "'") // Smart single quotes
+      .replace(/[\u201C\u201D]/g, '"') // Smart double quotes
+      .replace(/\r\n/g, '\n')
+      .replace(/\n{3,}/g, '\n\n')
+      .trim();
+  };
+
+  const copyText = (txt: string) => {
+    if (!txt) return;
+    const finalTxt = cleanMoodleText(txt);
+    navigator.clipboard.writeText(finalTxt);
+    setCopied(true);
+    setTimeout(() => setCopied(false), 2000);
+  };
+
+  // Upload Handlers for Module 1
+  const handleImageUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const files = e.target.files;
+    if (!files) return;
+    const remaining = 12 - uploadedImages.length;
+    const toAdd = Array.from(files).slice(0, remaining);
+
+    toAdd.forEach((file) => {
+      const reader = new FileReader();
+      reader.onload = () => {
+        setUploadedImages((prev) => [...prev, { name: file.name, dataUrl: reader.result as string }]);
+      };
+      reader.readAsDataURL(file);
+    });
+    e.target.value = '';
+  };
+
+  const handleDocUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const ext = file.name.split('.').pop()?.toLowerCase();
+    try {
+      if (ext === 'docx') {
+        const mammoth = (window as any).mammoth;
+        if (mammoth) {
+          const arrayBuffer = await file.arrayBuffer();
+          const res = await mammoth.extractRawText({ arrayBuffer });
+          setOutlineInput((prev) => prev + '\n\n' + res.value);
+        } else {
+          setOutlineInput((prev) => prev + `\n[File Attached: ${file.name}]`);
+        }
+      } else {
+        const text = await file.text();
+        setOutlineInput((prev) => prev + '\n\n' + text);
+      }
+    } catch {
+      alert('ဖိုင်ဖတ်ရှု၍ မရပါခင်ဗျာ။');
+    }
+    e.target.value = '';
+  };
+
+  // 1. Generate Outline & Checklist
+  const handleGenerateOutline = async () => {
+    if (!outlineInput.trim() && uploadedImages.length === 0) {
+      return alert('Assignment မေးခွန်း သို့မဟုတ် Rubric ပုံ ထည့်သွင်းပေးပါခင်ဗျာ။');
+    }
+    const prompt = `Analyze this university assignment rubric/prompt thoroughly. Provide:
+1. Strict "A-Grade" Rubric Requirements Checklist.
+2. Step-by-Step Writing Outline with clear section-by-section requirements.
+Respond clearly in academic Burmese and English:\n${outlineInput}`;
+
+    const res = await callGemini(prompt, 950, uploadedImages);
+    if (res) {
+      setOutlineResult(res);
+      const newHist = [res.slice(0, 80) + '...', ...historyItems.slice(0, 3)];
+      setHistoryItems(newHist);
+      localStorage.setItem('akari_outline_history', JSON.stringify(newHist));
+    }
+  };
+
+  // 1B. Turnitin False-Positive Shield & Outdated Citation Audit (>10 Years)
+  const handleAuditIntegrity = async () => {
+    if (!integrityInput.trim()) {
+      return alert('စစ်ဆေးရန် စာမူကြမ်း သို့မဟုတ် References စာရင်း ထည့်သွင်းပေးပါခင်ဗျာ။');
+    }
+    const prompt = `Act as an Academic Integrity and Turnitin Specialist.
+Audit this text for Academic Integrity, Peer-Reviewed Authenticity, and Citation Age:
+1. 🛡️ Turnitin False-Positive Shield:
+   - Identify generic definitions, template headings, and common assignment prompts triggering false similarity.
+   - Provide concrete humanized paraphrasing strategies to drop similarity below 10%.
+2. 📚 Real Books & Peer-Reviewed Journal Verification:
+   - Audit all in-text citations and reference entries against APA 7th standards.
+3. ⚠️ 10-Year Currency Audit (>10 Years Old Warning):
+   - Flag any academic source published over 10 years ago (prior to 2016).
+   - Recommend modern alternative peer-reviewed sources where outdated data weakens the argument.
+Respond directly and cleanly in Burmese:\n${integrityInput}`;
+
+    const res = await callGemini(prompt, 950);
+    setIntegrityResult(res);
+  };
+
+  // 2. Draft Audit (INTEGRATED WITH MODULE 1 OUTLINE & RUBRIC CONTEXT)
+  const handleAuditDraft = async () => {
+    if (!draftInput.trim()) {
+      return alert('စစ်ဆေးရန် Draft စာမူကြမ်း ထည့်သွင်းပေးပါခင်ဗျာ။');
+    }
+
+    // Connects with Module 1's rubric/outline context if available
+    const contextPrompt = outlineInput.trim() || outlineResult.trim()
+      ? `\n\n[LINKED RUBRIC & ASSIGNMENT CRITERIA FROM MODULE 1]:\n${outlineInput.slice(0, 1000)}\n${outlineResult.slice(0, 1000)}`
+      : '';
+
+    const prompt = `Critique and audit this student's assignment draft.
+Compare the draft directly against academic standards and rubric criteria.${contextPrompt}
+EVALUATE:
+1. Thesis Statement strength and clarity.
+2. Logic gaps, unsubstantiated claims, and transitions.
+3. Strict alignment with the assignment criteria.
+4. Specific, actionable rubric-based improvements.
+Respond in rigorous, encouraging Burmese:\n${draftInput}`;
+
+    const res = await callGemini(prompt, 950);
+    setDraftAuditResult(res);
+  };
+
+  // 3. Discussion Studio
+  const handleDiscussionSubmit = async () => {
+    if (!classmatePost.trim()) return alert('Classmate ၏ စာသားကို ထည့်သွင်းပေးပါခင်ဗျာ။');
+    const prompt = discussionMode === 'peer'
+      ? `Write 2 insightful, academic Peer Comments (Rubric: 100+ words each, critical analysis, no AI clichés) responding to this classmate post for Topic "${unitTopic}":\n${classmatePost}`
+      : `Write thoughtful follow-up replies answering questions asked under my post for Topic "${unitTopic}":\n${classmatePost}`;
+    const res = await callGemini(prompt, 750);
+    setDiscussionResult(res);
+  };
+
+  // 4. Paraphraser
+  const handleParaphraseSubmit = async () => {
+    if (!paraphraseText.trim()) return alert('ပြန်လည်ရေးသားမည့် စာသား ထည့်သွင်းပေးပါခင်ဗျာ။');
+    const prompt = `Paraphrase the following academic text using ${paraphraseDepth} mode. Strictly eliminate repetitive AI vocabulary, vary sentence structures, and maintain original factual citations without losing depth:\n${paraphraseText}`;
+    const res = await callGemini(prompt, 750);
+    setParaphraseResult(res);
+  };
+
+  // 5. Emergency 1-Hour Generator
+  const handleEmergencyRescuer = async () => {
+    if (!emergencyTopic.trim()) return alert('Assignment မေးခွန်း သို့မဟုတ် ခေါင်းစဉ်ကို ထည့်သွင်းပေးပါခင်ဗျာ။');
+    const prompt = `You are an Emergency Academic Assignment Rescuer for university students with only 1 hour left until deadline.
+Produce a COMPLETE, submission-ready, fully written academic assignment based on the prompt.
+STRICT REQUIREMENTS:
+1. Complete written assignment with academic introduction, structured argument paragraphs, and conclusion.
+2. NOT an outline, NOT a leave letter. Write the real assignment text.
+3. Tone: Scholarly, authentic student voice without fluff.
+4. Keep within ~350-500 words ready to copy-paste into the portal.
+
+Assignment Prompt/Topic:
+${emergencyTopic}`;
+
+    const res = await callGemini(prompt, 1100);
+    setEmergencyResult(res);
+  };
+
+  return (
+    <div className="space-y-4">
+      {/* Top 5 Primary Module Navigation Bar */}
+      <div className="p-3.5 rounded-2xl bg-[#0c1222]/90 border border-slate-800 flex items-center justify-between flex-wrap gap-2">
+        <div className="flex items-center gap-2">
+          {onBackToDashboard && (
+            <button
+              type="button"
+              onClick={onBackToDashboard}
+              className="px-2.5 py-1 rounded-xl bg-slate-900 hover:bg-slate-800 text-slate-300 border border-slate-700 text-xs font-bold transition-all"
+            >
+              ← Back
+            </button>
+          )}
+        </div>
+
+        {/* 5 PRIMARY MODULE TABS */}
+        <div className="flex items-center gap-1.5 overflow-x-auto scrollbar-none py-1">
+          <button
+            type="button"
+            onClick={() => setActiveModule('outline')}
+            className={`px-3 py-1.5 rounded-xl text-xs font-bold whitespace-nowrap transition-all flex items-center gap-1.5 ${
+              activeModule === 'outline' ? 'bg-indigo-600 text-white shadow' : 'bg-slate-900/60 text-slate-400 hover:text-slate-200'
+            }`}
+          >
+            <span>📋</span> "A ရဖို့" Checklist & Outline
+          </button>
+
+          <button
+            type="button"
+            onClick={() => setActiveModule('draft_audit')}
+            className={`px-3 py-1.5 rounded-xl text-xs font-bold whitespace-nowrap transition-all flex items-center gap-1.5 ${
+              activeModule === 'draft_audit' ? 'bg-indigo-600 text-white shadow' : 'bg-slate-900/60 text-slate-400 hover:text-slate-200'
+            }`}
+          >
+            <span>🧠</span> Draft စစ်ဆေးချက် (Logic & Thesis)
+          </button>
+
+          <button
+            type="button"
+            onClick={() => setActiveModule('discussion_studio')}
+            className={`px-3 py-1.5 rounded-xl text-xs font-bold whitespace-nowrap transition-all flex items-center gap-1.5 ${
+              activeModule === 'discussion_studio' ? 'bg-indigo-600 text-white shadow' : 'bg-slate-900/60 text-slate-400 hover:text-slate-200'
+            }`}
+          >
+            <span>💬</span> Discussion Studio (Peer & Follow-up)
+          </button>
+
+          <button
+            type="button"
+            onClick={() => setActiveModule('paraphraser')}
+            className={`px-3 py-1.5 rounded-xl text-xs font-bold whitespace-nowrap transition-all flex items-center gap-1.5 ${
+              activeModule === 'paraphraser' ? 'bg-indigo-600 text-white shadow' : 'bg-slate-900/60 text-slate-400 hover:text-slate-200'
+            }`}
+          >
+            <span>📈</span> Paraphraser & Depth Controller
+          </button>
+
+          <button
+            type="button"
+            onClick={() => setActiveModule('emergency_rescuer')}
+            className={`px-3 py-1.5 rounded-xl text-xs font-bold whitespace-nowrap transition-all flex items-center gap-1.5 ${
+              activeModule === 'emergency_rescuer' ? 'bg-amber-600 text-white shadow' : 'bg-slate-900/60 text-slate-400 hover:text-slate-200'
+            }`}
+          >
+            <span>⏱️</span> အရေးပေါ် ၁ နာရီ Rescuer (Emergency)
+          </button>
+        </div>
+      </div>
+
+      {/* ========================================================= */}
+      {/* MODULE 1: OUTLINE & TURNITIN INTEGRITY (SOURCE 17 MATCH) */}
+      {/* ========================================================= */}
+      {activeModule === 'outline' && (
+        <div className="space-y-4">
+          <div className="p-3.5 rounded-2xl bg-[#0c1222]/90 border border-slate-800 flex items-center justify-between flex-wrap gap-2">
+            {/* Sub-Tabs: Exactly matching Source 17 */}
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                onClick={() => setOutlineSubTab('outline_mode')}
+                className={`px-3 py-1.5 rounded-xl text-xs font-bold flex items-center gap-1.5 transition-all ${
+                  outlineSubTab === 'outline_mode'
+                    ? 'bg-indigo-600 text-white shadow'
+                    : 'bg-slate-950 text-slate-400 hover:text-slate-200 border border-slate-800'
+                }`}
+              >
+                <span>📋</span> A-Grade Outline & Checklist (12-Image)
+              </button>
+
+              <button
+                type="button"
+                onClick={() => setOutlineSubTab('turnitin_integrity')}
+                className={`px-3 py-1.5 rounded-xl text-xs font-bold flex items-center gap-1.5 transition-all ${
+                  outlineSubTab === 'turnitin_integrity'
+                    ? 'bg-rose-600 text-white shadow'
+                    : 'bg-slate-950 text-slate-400 hover:text-slate-200 border border-slate-800'
+                }`}
+              >
+                <span>🛡️</span> Integrity & စာအုပ်/ဂျာနယ်အစစ်များ (Turnitin)
+              </button>
+            </div>
+
+            {/* Moodle Cleaner Toggle & History */}
+            <div className="flex items-center gap-3">
+              <label className="flex items-center gap-2 cursor-pointer bg-slate-950 px-2.5 py-1 rounded-xl border border-slate-800 text-[11px] text-slate-300">
+                <input
+                  type="checkbox"
+                  checked={moodleCleanerActive}
+                  onChange={(e) => setMoodleCleanerActive(e.target.checked)}
+                  className="rounded border-slate-700 text-indigo-600 focus:ring-0"
+                />
+                <span>Moodle သန့်စင်စနစ် (Cleaner)</span>
+                <span className={`text-[10px] font-bold ${moodleCleanerActive ? 'text-emerald-400' : 'text-slate-500'}`}>
+                  {moodleCleanerActive ? 'ON' : 'OFF'}
+                </span>
+              </label>
+
+              {outlineSubTab === 'outline_mode' && (
+                <button
+                  type="button"
+                  onClick={() => setShowHistoryModal(!showHistoryModal)}
+                  className="px-2.5 py-1 rounded-xl bg-slate-900 border border-slate-700 text-slate-300 text-xs font-semibold hover:bg-slate-800"
+                >
+                  📜 ယခင် မှတ်တမ်းများ ({historyItems.length})
+                </button>
+              )}
+            </div>
+          </div>
+
+          {/* 1A. OUTLINE SUB-MODE */}
+          {outlineSubTab === 'outline_mode' && (
+            <div className="grid grid-cols-1 lg:grid-cols-12 gap-4">
+              <div className="lg:col-span-5 p-4 rounded-2xl bg-[#0c1222]/90 border border-slate-800 space-y-3">
+                <label className="text-xs font-bold text-slate-200 block">
+                  ASSIGNMENT မေးခွန်း၊ RUBRIC သို့မဟုတ် လိုအပ်ချက်များ:
+                </label>
+
+                <div className="flex items-center gap-2">
+                  <label className="cursor-pointer px-3 py-1.5 rounded-xl bg-slate-900 hover:bg-slate-800 border border-slate-700 text-slate-300 text-xs font-semibold flex items-center gap-1.5">
+                    <span>🖼️</span> ပုံ / Rubric တင်မည် ({uploadedImages.length}/12)
+                    <input type="file" accept="image/*" multiple onChange={handleImageUpload} className="hidden" />
+                  </label>
+                  <label className="cursor-pointer px-3 py-1.5 rounded-xl bg-slate-900 hover:bg-slate-800 border border-slate-700 text-slate-300 text-xs font-semibold flex items-center gap-1.5">
+                    <span>📄</span> Word / PDF တင်မည်
+                    <input type="file" accept=".docx,.pdf,.txt" onChange={handleDocUpload} className="hidden" />
+                  </label>
+                </div>
+
+                {uploadedImages.length > 0 && (
+                  <div className="flex items-center gap-2 overflow-x-auto py-1">
+                    {uploadedImages.map((img, i) => (
+                      <div key={i} className="relative shrink-0">
+                        <img src={img.dataUrl} alt={img.name} className="w-12 h-12 rounded-lg object-cover border border-slate-700" />
+                        <button
+                          type="button"
+                          onClick={() => setUploadedImages((prev) => prev.filter((_, idx) => idx !== i))}
+                          className="absolute -top-1 -right-1 bg-rose-600 text-white rounded-full w-4 h-4 text-[10px] flex items-center justify-center"
+                        >
+                          ×
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                )}
+
+                <textarea
+                  rows={11}
+                  value={outlineInput}
+                  onChange={(e) => setOutlineInput(e.target.value)}
+                  placeholder="Assignment မေးခွန်း သို့မဟုတ် ဖြည့်စွက်မှတ်စုများကို ဤနေရာတွင် ထည့်ပါ (သို့မဟုတ် အပေါ်မှ ပုံ ၁၂ ပုံအထိ တင်ပါ)..."
+                  className="w-full p-3 text-xs rounded-xl bg-slate-950 border border-slate-800 text-slate-100 placeholder-slate-600 focus:outline-none focus:border-indigo-500 font-mono"
+                />
+
+                <button
+                  type="button"
+                  onClick={handleGenerateOutline}
+                  disabled={loading}
+                  className="w-full py-2.5 rounded-xl bg-gradient-to-r from-indigo-600 to-blue-600 hover:from-indigo-500 hover:to-blue-500 text-white font-bold text-xs shadow-md transition-all flex items-center justify-center gap-2"
+                >
+                  {loading ? 'Checklist ထုတ်ယူနေသည်...' : '⚡ A-Grade Outline & Checklist ထုတ်ယူမည်'}
+                </button>
+              </div>
+
+              <div className="lg:col-span-7 p-4 rounded-2xl bg-[#0c1222]/90 border border-slate-800 space-y-3">
+                <div className="flex items-center justify-between pb-2 border-b border-slate-800">
+                  <span className="text-xs font-bold text-slate-200">ခွဲခြမ်းစိတ်ဖြာချက် & A-GRADE OUTLINE ရလဒ်</span>
+                  <div className="flex items-center gap-2">
+                    <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-indigo-950 text-indigo-300 border border-indigo-800/40">
+                      A-Grade Rubric Compliant
+                    </span>
+                    {outlineResult && (
+                      <button type="button" onClick={() => copyText(outlineResult)} className="text-xs text-cyan-400 hover:underline">
+                        {copied ? '✓ Copied' : '📋 Copy Clean Text'}
+                      </button>
+                    )}
+                  </div>
+                </div>
+                <div className="h-[400px] overflow-y-auto p-4 rounded-xl bg-slate-950 border border-slate-800 text-xs text-slate-200 font-mono leading-relaxed whitespace-pre-wrap">
+                  {outlineResult || 'မေးခွန်း/Rubric ပုံများ (အများဆုံး ၁၂ ပုံ) သို့မဟုတ် ဖိုင်တင်သွင်းပြီး ခလုတ်ကို နှိပ်ပါ'}
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* 1B. TURNITIN INTEGRITY SUB-MODE (EXACT MATCH SOURCE 17 & 18) */}
+          {outlineSubTab === 'turnitin_integrity' && (
+            <div className="grid grid-cols-1 lg:grid-cols-12 gap-4">
+              <div className="lg:col-span-5 p-4 rounded-2xl bg-[#0c1222]/90 border border-slate-800 space-y-3">
+                <label className="text-xs font-bold text-rose-300 block">
+                  🛡️ စာမူကြမ်း၊ ကိုးကားချက် သို့မဟုတ် TURNITIN SIMILARITY အပိုဒ်များ:
+                </label>
+                <textarea
+                  rows={13}
+                  value={integrityInput}
+                  onChange={(e) => setIntegrityInput(e.target.value)}
+                  placeholder="Turnitin တွင် False Positive ထွက်နေသော အပိုဒ်များ သို့မဟုတ် တိုက်စစ်လိုသော References စာရင်းကို ထည့်ပါ..."
+                  className="w-full p-3 text-xs rounded-xl bg-slate-950 border border-slate-800 text-slate-100 placeholder-slate-600 focus:outline-none focus:border-rose-500 font-mono"
+                />
+                <button
+                  type="button"
+                  onClick={handleAuditIntegrity}
+                  disabled={loading}
+                  className="w-full py-2.5 rounded-xl bg-gradient-to-r from-rose-600 to-pink-600 hover:from-rose-500 hover:to-pink-500 text-white font-bold text-xs shadow-md transition-all flex items-center justify-center gap-2"
+                >
+                  {loading ? 'စိစစ်နေပါသည်...' : '🛡️ Turnitin False-Positive & Source Audit ပြုလုပ်မည်'}
+                </button>
+              </div>
+
+              <div className="lg:col-span-7 p-4 rounded-2xl bg-[#0c1222]/90 border border-slate-800 space-y-3">
+                <div className="flex items-center justify-between pb-2 border-b border-slate-800">
+                  <span className="text-xs font-bold text-slate-200">ACADEMIC INTEGRITY & TURNITIN AUDIT ရလဒ်</span>
+                  {integrityResult && (
+                    <button type="button" onClick={() => copyText(integrityResult)} className="text-xs text-cyan-400 hover:underline">
+                      {copied ? '✓ Copied' : '📋 Copy Clean Text'}
+                    </button>
+                  )}
+                </div>
+                <div className="h-[400px] overflow-y-auto p-4 rounded-xl bg-slate-950 border border-slate-800 text-xs text-slate-200 font-mono leading-relaxed whitespace-pre-wrap">
+                  {integrityResult || 'ဘယ်ဘက်တွင် စာမူကြမ်း သို့မဟုတ် References များ ထည့်သွင်းပြီး စစ်ဆေးပါ...'}
+                </div>
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* ========================================================= */}
+      {/* MODULE 2: DRAFT AUDIT (MATCH SOURCE 16 - DIRECTLY LINKED WITH MODULE 1) */}
+      {/* ========================================================= */}
+      {activeModule === 'draft_audit' && (
+        <div className="space-y-3">
+          {outlineResult && (
+            <div className="p-3 rounded-xl bg-indigo-950/40 border border-indigo-800/40 flex items-center justify-between text-xs text-indigo-300">
+              <span>🔗 Module 1 မှ Rubric / Checklist Context ချိတ်ဆက်ထားပြီး ဖြစ်ပါသည်။</span>
+              <span className="text-[10px] bg-indigo-900 px-2 py-0.5 rounded text-white font-mono">Linked</span>
+            </div>
+          )}
+
+          <div className="grid grid-cols-1 lg:grid-cols-12 gap-4">
+            <div className="lg:col-span-5 p-4 rounded-2xl bg-[#0c1222]/90 border border-slate-800 space-y-3">
+              <label className="text-xs font-bold text-slate-200 block">
+                စစ်ဆေးလိုသော ASSIGNMENT DRAFT (စာမူကြမ်း):
+              </label>
+              <textarea
+                rows={14}
+                value={draftInput}
+                onChange={(e) => setDraftInput(e.target.value)}
+                placeholder="သင်ရေးထားသော စာမူကြမ်းကို ထည့်သွင်းပြီး Logic နှင့် Thesis ကို စစ်ဆေးပါ..."
+                className="w-full p-3 text-xs rounded-xl bg-slate-950 border border-slate-800 text-slate-100 placeholder-slate-600 focus:outline-none focus:border-indigo-500 font-mono"
+              />
+              <button
+                type="button"
+                onClick={handleAuditDraft}
+                disabled={loading}
+                className="w-full py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white font-bold text-xs shadow transition-all flex items-center justify-center gap-2"
+              >
+                {loading ? 'စိစစ်နေသည်...' : '🔍 Draft အား အသေးစိတ် စစ်ဆေးဝေဖန်မည်'}
+              </button>
+            </div>
+
+            <div className="lg:col-span-7 p-4 rounded-2xl bg-[#0c1222]/90 border border-slate-800 space-y-3">
+              <div className="flex items-center justify-between pb-2 border-b border-slate-800">
+                <span className="text-xs font-bold text-slate-200">LOGIC, THESIS & RUBRIC AUDIT ရလဒ်</span>
+                {draftAuditResult && (
+                  <button type="button" onClick={() => copyText(draftAuditResult)} className="text-xs text-cyan-400 hover:underline">
+                    {copied ? '✓ Copied' : '📋 Copy Clean Text'}
+                  </button>
+                )}
+              </div>
+              <div className="h-[380px] overflow-y-auto p-4 rounded-xl bg-slate-950 border border-slate-800 text-xs text-slate-200 font-mono leading-relaxed whitespace-pre-wrap">
+                {draftAuditResult || 'Draft ထည့်သွင်းပြီး စစ်ဆေးနိုင်ပါသည်...'}
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ========================================================= */}
+      {/* MODULE 3: DISCUSSION STUDIO (PEER & FOLLOW-UP) */}
+      {/* ========================================================= */}
+      {activeModule === 'discussion_studio' && (
+        <div className="space-y-4">
+          <div className="p-4 rounded-2xl bg-[#0c1222]/90 border border-slate-800 flex items-center justify-between flex-wrap gap-2">
+            <div>
+              <div className="flex items-center gap-2">
+                <span className="text-base">💬</span>
+                <h4 className="text-xs font-bold text-slate-100">Discussion Studio (Peer Review & Follow-up Replies)</h4>
+                <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-emerald-950 text-emerald-300 border border-emerald-800/40">
+                  Rubric: 100+ Words & Anti-AI
+                </span>
+              </div>
+              <p className="text-[11px] text-slate-400 mt-1">Classmates များအတွက် အမှတ်ပြည့် Peer Comments ရေးခြင်းနှင့် မိမိ Post အောက်မှ မေးခွန်းများကို ပညာရပ်ဆန်ဆန် ပြန်လည်ဖြေကြားခြင်း</p>
+            </div>
+            <div className="flex items-center gap-1.5 p-1 rounded-xl bg-slate-950 border border-slate-800">
+              <button
+                type="button"
+                onClick={() => setDiscussionMode('peer')}
+                className={`px-3 py-1 rounded-lg text-xs font-bold transition-all ${
+                  discussionMode === 'peer' ? 'bg-indigo-600 text-white shadow' : 'text-slate-400 hover:text-slate-200'
+                }`}
+              >
+                👥 Classmates Peer Comments (၃ ယောက်စာ)
+              </button>
+              <button
+                type="button"
+                onClick={() => setDiscussionMode('followup')}
+                className={`px-3 py-1 rounded-lg text-xs font-bold transition-all ${
+                  discussionMode === 'followup' ? 'bg-indigo-600 text-white shadow' : 'text-slate-400 hover:text-slate-200'
+                }`}
+              >
+                💬 ကိုယ့် post မေးခွန်းများ ပြန်ဖြေရန်
+              </button>
+            </div>
+          </div>
+
+          <div className="grid grid-cols-1 lg:grid-cols-12 gap-4">
+            <div className="lg:col-span-5 p-4 rounded-2xl bg-[#0c1222]/90 border border-slate-800 space-y-3">
+              <div>
+                <label className="text-[10px] text-slate-400 font-bold block mb-1">Unit ခေါင်းစဉ် (Topic / Context):</label>
+                <input
+                  type="text"
+                  value={unitTopic}
+                  onChange={(e) => setUnitTopic(e.target.value)}
+                  placeholder="Unit Topic / Main Question"
+                  className="w-full p-2 text-xs rounded-xl bg-slate-950 border border-slate-800 text-slate-100 focus:outline-none focus:border-indigo-500 font-mono"
+                />
+              </div>
+              <div>
+                <label className="text-xs font-bold text-slate-200 block mb-1">
+                  {discussionMode === 'peer' ? 'CLASSMATE ၏ မူရင်း POST စာသား:' : 'မိမိ Post အောက်တွင် မေးထားသော မေးခွန်းများ:'}
+                </label>
+                <textarea
+                  rows={10}
+                  value={classmatePost}
+                  onChange={(e) => setClassmatePost(e.target.value)}
+                  placeholder="Classmate ရေးသားထားသော Discussion Post စာသားကို ဤနေရာတွင် ကူးထည့်ပါ..."
+                  className="w-full p-3 text-xs rounded-xl bg-slate-950 border border-slate-800 text-slate-100 placeholder-slate-600 focus:outline-none focus:border-indigo-500 font-mono"
+                />
+              </div>
+              <button
+                type="button"
+                onClick={handleDiscussionSubmit}
+                disabled={loading}
+                className="w-full py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white font-bold text-xs shadow transition-all"
+              >
+                {loading ? 'ရေးသားနေပါသည်...' : discussionMode === 'peer' ? '✨ အမှတ်ပြည့် Peer Responses ထုတ်ယူမည်' : '✨ Follow-up အဖြေများ ထုတ်ယူမည်'}
+              </button>
+            </div>
+
+            <div className="lg:col-span-7 p-4 rounded-2xl bg-[#0c1222]/90 border border-slate-800 space-y-3">
+              <div className="flex items-center justify-between pb-2 border-b border-slate-800">
+                <span className="text-xs font-bold text-slate-200">အမှတ်ပြည့် PEER RESPONSES ရလဒ်</span>
+                {discussionResult && (
+                  <button type="button" onClick={() => copyText(discussionResult)} className="text-xs text-cyan-400 hover:underline">
+                    {copied ? '✓ Copied' : '📋 Copy Clean Text'}
+                  </button>
+                )}
+              </div>
+              <div className="h-[380px] overflow-y-auto p-4 rounded-xl bg-slate-950 border border-slate-800 text-xs text-slate-200 font-serif leading-relaxed whitespace-pre-wrap">
+                {discussionResult || 'ဘယ်ဘက်တွင် စာသားထည့်သွင်း၍ စတင်ထုတ်ယူပါ...'}
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ========================================================= */}
+      {/* MODULE 4: PARAPHRASER & DEPTH CONTROLLER */}
+      {/* ========================================================= */}
+      {activeModule === 'paraphraser' && (
+        <div className="grid grid-cols-1 lg:grid-cols-12 gap-4">
+          <div className="lg:col-span-5 p-4 rounded-2xl bg-[#0c1222]/90 border border-slate-800 space-y-3">
+            <div className="flex items-center justify-between">
+              <label className="text-xs font-bold text-slate-200">မူရင်း စာသား:</label>
+              <div className="flex items-center gap-1">
+                {(['standard', 'deep', 'academic'] as const).map((d) => (
+                  <button
+                    key={d}
+                    type="button"
+                    onClick={() => setParaphraseDepth(d)}
+                    className={`px-2 py-0.5 rounded text-[10px] font-bold border transition-all ${
+                      paraphraseDepth === d ? 'bg-indigo-600 text-white border-indigo-500' : 'bg-slate-950 text-slate-400 border-slate-800'
+                    }`}
+                  >
+                    {d}
+                  </button>
+                ))}
+              </div>
+            </div>
+            <textarea
+              rows={13}
+              value={paraphraseText}
+              onChange={(e) => setParaphraseText(e.target.value)}
+              placeholder="ပြန်လည်ရေးသားလိုသော စာသားကို ဤနေရာတွင် ထည့်ပါ..."
+              className="w-full p-3 text-xs rounded-xl bg-slate-950 border border-slate-800 text-slate-100 placeholder-slate-600 focus:outline-none focus:border-indigo-500 font-mono"
+            />
+            <button
+              type="button"
+              onClick={handleParaphraseSubmit}
+              disabled={loading}
+              className="w-full py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white font-bold text-xs shadow transition-all"
+            >
+              {loading ? 'ပြန်လည်ရေးသားနေသည်...' : '🔄 Paraphrase & Depth Control ပြုလုပ်မည်'}
+            </button>
+          </div>
+          <div className="lg:col-span-7 p-4 rounded-2xl bg-[#0c1222]/90 border border-slate-800 space-y-3">
+            <div className="flex items-center justify-between pb-2 border-b border-slate-800">
+              <span className="text-xs font-bold text-slate-200">PARAPHRASED SCHOLARLY RESULT</span>
+              {paraphraseResult && (
+                <button type="button" onClick={() => copyText(paraphraseResult)} className="text-xs text-cyan-400 hover:underline">
+                  {copied ? '✓ Copied' : '📋 Copy Clean Text'}
+                </button>
+              )}
+            </div>
+            <div className="h-[380px] overflow-y-auto p-4 rounded-xl bg-slate-950 border border-slate-800 text-xs text-slate-200 font-serif leading-relaxed whitespace-pre-wrap">
+              {paraphraseResult || 'ဘယ်ဘက်တွင် စာသားထည့်သွင်းပြီး စတင်ပါ...'}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ========================================================= */}
+      {/* MODULE 5: EMERGENCY 1-HOUR RESCUER (ASSIGNMENT GENERATOR) */}
+      {/* ========================================================= */}
+      {activeModule === 'emergency_rescuer' && (
+        <div className="grid grid-cols-1 lg:grid-cols-12 gap-4">
+          <div className="lg:col-span-5 p-4 rounded-2xl bg-[#0c1222]/90 border border-amber-800/40 space-y-3">
+            <div className="p-3 rounded-xl bg-amber-950/30 border border-amber-750/40 text-xs text-amber-200">
+              <strong>⏱️ အရေးပေါ် ၁ နာရီ Rescuer:</strong> Deadline ကပ်နေချိန်တွင် တင်သွင်းရန် အဆင်သင့်ဖြစ်သော Assignment အပြည့်အစုံကို မိနစ်ပိုင်းအတွင်း ချက်ချင်း ထုတ်ယူနိုင်သော စနစ်ဖြစ်ပါသည်။
+            </div>
+
+            <div>
+              <label className="text-xs font-bold text-slate-200 block mb-1">
+                Assignment မေးခွန်း သို့မဟုတ် ခေါင်းစဉ် (Topic / Question):
+              </label>
+              <textarea
+                rows={11}
+                value={emergencyTopic}
+                onChange={(e) => setEmergencyTopic(e.target.value)}
+                placeholder="Deadline မမီတော့သည့် Assignment မေးခွန်း သို့မဟုတ် လိုအပ်ချက်များကို ဤနေရာတွင် ထည့်သွင်းပါ..."
+                className="w-full p-3 text-xs rounded-xl bg-slate-950 border border-slate-800 text-slate-100 placeholder-slate-600 focus:outline-none focus:border-amber-500 font-mono"
+              />
+            </div>
+
+            <button
+              type="button"
+              onClick={handleEmergencyRescuer}
+              disabled={loading}
+              className="w-full py-2.5 rounded-xl bg-amber-600 hover:bg-amber-500 text-white font-bold text-xs shadow transition-all flex items-center justify-center gap-2"
+            >
+              {loading ? (
+                <>
+                  <div className="w-3.5 h-3.5 border-2 border-white border-t-transparent rounded-full animate-spin" />
+                  <span>Assignment ကို အမြန်ဆုံး ရေးသားထုတ်ယူနေသည်...</span>
+                </>
+              ) : (
+                <>
+                  <span>🚨</span>
+                  <span>အရေးပေါ် Assignment အပြည့်အစုံ ချက်ချင်းထုတ်မည်</span>
+                </>
+              )}
+            </button>
+          </div>
+
+          <div className="lg:col-span-7 p-4 rounded-2xl bg-[#0c1222]/90 border border-slate-800 space-y-3">
+            <div className="flex items-center justify-between pb-2 border-b border-slate-800">
+              <span className="text-xs font-bold text-slate-200">PORTAL-READY EMERGENCY ASSIGNMENT RESULT</span>
+              {emergencyResult && (
+                <button
+                  type="button"
+                  onClick={() => copyText(emergencyResult)}
+                  className="text-xs text-cyan-400 hover:underline flex items-center gap-1"
+                >
+                  {copied ? '✓ Copied' : '📋 Copy Clean Assignment'}
+                </button>
+              )}
+            </div>
+            <div className="h-[380px] overflow-y-auto p-4 rounded-xl bg-slate-950 border border-slate-800 text-xs text-slate-200 font-serif leading-relaxed whitespace-pre-wrap">
+              {emergencyResult || 'ဘယ်ဘက်တွင် မေးခွန်းထည့်ပြီး "အရေးပေါ် Assignment အပြည့်အစုံ ချက်ချင်းထုတ်မည်" ကို နှိပ်ပါ...'}
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+};

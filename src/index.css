@@ -1,0 +1,65 @@
+@import "tailwindcss";
+
+@layer base {
+  body {
+    font-family: 'Plus Jakarta Sans', 'Padauk', system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  }
+}
+
+/* Eye-care Low-Light Reading Mode for Night Study (Reduces eye strain & blue light) */
+.eyecare-mode {
+  background-color: #0c0e12 !important;
+  color: #dfd8cb !important;
+  filter: sepia(12%) contrast(96%) brightness(97%);
+}
+
+.eyecare-mode .bg-slate-950 {
+  background-color: #0a0c10 !important;
+}
+
+.eyecare-mode .bg-slate-900 {
+  background-color: #12151b !important;
+}
+
+.eyecare-mode .text-white {
+  color: #ede7dc !important;
+}
+
+.eyecare-mode .text-slate-200 {
+  color: #dfd8cb !important;
+}
+
+.eyecare-mode .text-slate-300 {
+  color: #cfc8ba !important;
+}
+
+.eyecare-mode .border-slate-800 {
+  border-color: #242832 !important;
+}
+
+/* Global smooth scrolling & iOS safe area support */
+html, body {
+  overflow-x: hidden;
+  -webkit-tap-highlight-color: transparent;
+  padding-bottom: env(safe-area-inset-bottom);
+}
+
+/* Hide scrollbars for swipeable navigation rows */
+.no-scrollbar::-webkit-scrollbar {
+  display: none;
+}
+.no-scrollbar {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+}
+
+/* Low-Bandwidth Mode: Disable animations, transitions, and heavy blur effects */
+html.low-bandwidth-mode *,
+html.low-bandwidth-mode *::before,
+html.low-bandwidth-mode *::after {
+  animation-duration: 0.001ms !important;
+  animation-iteration-count: 1 !important;
+  transition-duration: 0.001ms !important;
+  backdrop-filter: none !important;
+}
+

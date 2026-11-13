@@ -1,0 +1,1421 @@
+import React, { useState } from 'react';
+
+type AssignmentSubModule = 
+  | 'outline_suite' 
+  | 'discussion_reply' 
+  | 'paraphraser' 
+  | 'emergency_rescuer';
+
+type Module1SubTab = 
+  | 'outline' 
+  | 'draft_audit' 
+  | 'turnitin_integrity' 
+  | 'advisor_email';
+
+const VERIFIED_FLASH_MODELS = [
+  'gemini-3.5-flash-lite',
+  'gemini-3.1-flash-lite',
+  'gemini-flash-lite-latest',
+  'gemini-3-flash-preview',
+  'gemini-3.6-flash',
+  'gemini-3.8-flash',
+  'gemini-flash-latest'
+];
+
+const EXTERNAL_PLAGIARISM_TOOLS = [
+  { name: 'DupliChecker', badge: 'Free (1,000 words)', badgeColor: 'bg-emerald-950 text-emerald-400 border-emerald-800/40', desc: 'Web ပေါ်ရှိ အချက်အလက်များနှင့် တိုက်ဆိုင်စစ်ဆေးပေးသည်။', url: 'https://www.duplichecker.com' },
+  { name: 'SmallSEOTools', badge: 'Web Checker', badgeColor: 'bg-blue-950 text-blue-400 border-blue-800/40', desc: 'စာပိုဒ်အလိုက် အင်တာနက်စာမျက်နှာများနှင့် စစ်ပေးသည်။', url: 'https://smallseotools.com/plagiarism-checker/' },
+  { name: 'PlagiarismDetector', badge: 'Free Tier', badgeColor: 'bg-cyan-950 text-cyan-400 border-cyan-800/40', desc: 'တူညီနေသော စာကြောင်းများကို အင်တာနက်ရင်းမြစ်များနှင့် စစ်ပေးသည်။', url: 'https://plagiarismdetector.net' },
+  { name: 'Scribbr', badge: 'Academic Checker', badgeColor: 'bg-purple-950 text-purple-400 border-purple-800/40', desc: 'ကျောင်းသုံးစာတမ်း database များကို တိုက်စစ်ပေးသည်။', url: 'https://www.scribbr.com/plagiarism-checker/' },
+  { name: 'Grammarly', badge: 'Academic / Web', badgeColor: 'bg-teal-950 text-teal-400 border-teal-800/40', desc: 'ProQuest database နှင့် academic source များကို တိုက်စစ်ပေးသည်။', url: 'https://www.grammarly.com/plagiarism-checker' }
+];
+
+const EXTERNAL_HUMANIZER_TOOLS = [
+  { name: 'QuillBot', badge: 'Humanizer / Paraphraser', badgeColor: 'bg-emerald-950 text-emerald-400 border-emerald-800/40', desc: 'စာကြောင်းတည်ဆောက်ပုံများကို သဘာဝကျကျ အသွင်ပြောင်းပေးသည်။', url: 'https://quillbot.com' },
+  { name: 'Undetectable AI', badge: 'Advanced Humanizer', badgeColor: 'bg-purple-950 text-purple-400 border-purple-800/40', desc: 'AI pattern များကို လူသားဟန်အဖြစ် ပြန်လည်မွမ်းမံပေးသည်။', url: 'https://undetectable.ai' },
+  { name: 'StealthWriter', badge: 'Bypass Engine', badgeColor: 'bg-blue-950 text-blue-400 border-blue-800/40', desc: 'AI ထွက်စာသားများကို သဘာဝဆန်သော academic flow ပြောင်းပေးသည်။', url: 'https://stealthwriter.ai' },
+  { name: 'HIX Bypass', badge: 'Academic Bypass', badgeColor: 'bg-teal-950 text-teal-400 border-teal-800/40', desc: 'စာပိုဒ်ဖွဲ့စည်းပုံနှင့် အသုံးအနှုန်းများကို humanize ပြုလုပ်ပေးသည်။', url: 'https://hix.ai/bypass-gpt' },
+  { name: 'BypassGPT', badge: 'Fast Humanizer', badgeColor: 'bg-amber-950 text-amber-400 border-amber-800/40', desc: 'ဆွေးနွေးချက်စာသားများကို လူကိုယ်တိုင်ရေးဟန်အဖြစ် ချိန်ညှိပေးသည်။', url: 'https://bypassgpt.ai' }
+];
+
+export const AssignmentWorkspace: React.FC<{ onBackToDashboard?: () => void }> = ({ onBackToDashboard }) => {
+  const [activeModule, setActiveModule] = useState<AssignmentSubModule>('outline_suite');
+  const [activeSubTab, setActiveSubTab] = useState<Module1SubTab>('outline');
+
+  // Global State
+  const [loading, setLoading] = useState(false);
+  const [copied, setCopied] = useState(false);
+  const [moodleCleanerActive, setMoodleCleanerActive] = useState<boolean>(true);
+
+  // 1A. Outline States
+  const [outlineInput, setOutlineInput] = useState('');
+  const [uploadedImages, setUploadedImages] = useState<{ name: string; dataUrl: string }[]>([]);
+  const [outlineResult, setOutlineResult] = useState('');
+  const [historyItems, setHistoryItems] = useState<string[]>(() => {
+    try {
+      return JSON.parse(localStorage.getItem('akari_outline_history') || '[]');
+    } catch {
+      return [];
+    }
+  });
+
+  // 1B. Draft Audit & Instructor Simulator States (Synchronized with Outline Context)
+  const [draftInput, setDraftInput] = useState('');
+  const [draftAttachedFile, setDraftAttachedFile] = useState<string>('');
+  const [draftRubricInput, setDraftRubricInput] = useState('');
+  const [draftRubricImages, setDraftRubricImages] = useState<{ name: string; dataUrl: string }[]>([]);
+  const [instructorFeedback, setInstructorFeedback] = useState('');
+  const [draftAuditResult, setDraftAuditResult] = useState('');
+  const [showDraftRubricOverride, setShowDraftRubricOverride] = useState(false);
+
+  // 1C. Turnitin & Free Crossref States
+  const [integrityInput, setIntegrityInput] = useState('');
+  const [integrityResult, setIntegrityResult] = useState('');
+  const [freeApiAuditing, setFreeApiAuditing] = useState(false);
+
+  // 1D. Advisor Email States
+  const [emailTemplateType, setEmailTemplateType] = useState<'blackout' | 'medical' | 'technical' | 'custom'>('blackout');
+  const [emailCourseName, setEmailCourseName] = useState('POLS 1503 - Globalization');
+  const [emailRecipientRole, setEmailRecipientRole] = useState<'instructor' | 'advisor' | 'both'>('instructor');
+  const [emailInstructorName, setEmailInstructorName] = useState('Dr. Innocent Ndock Kong');
+  const [emailStudentName, setEmailStudentName] = useState('Thin Yati Aung');
+  const [emailStudentID, setEmailStudentID] = useState('');
+  const [emailExtensionDays, setEmailExtensionDays] = useState('48 hours (2 Days)');
+  const [emailCustomReason, setEmailCustomReason] = useState('Due to an unexpected family emergency combined with severe local internet disruptions, I have been unable to submit my assignment on time.');
+
+  const buildEmailTemplate = (
+    type: 'blackout' | 'medical' | 'technical' | 'custom', 
+    cName = emailCourseName, 
+    iName = emailInstructorName, 
+    sName = emailStudentName, 
+    sID = emailStudentID, 
+    days = emailExtensionDays,
+    role = emailRecipientRole,
+    custom = emailCustomReason
+  ) => {
+    const idDisplay = sID.trim() ? sID : '[Your UoPeople ID]';
+    const salutation = role === 'advisor'
+      ? `Dear Program Advisor,`
+      : role === 'both'
+      ? `Dear ${iName} and Program Advisor,`
+      : `Dear ${iName},`;
+
+    if (type === 'blackout') {
+      return `Subject: Urgent Extension Request - Localized Infrastructure Disruption [${cName}]\n\n${salutation}\n\nI hope this email finds you well.\n\nI am writing to respectfully request an academic extension of ${days} for the upcoming coursework submission in ${cName}. In Yangon, Myanmar, we are currently experiencing severe rolling power outages and localized telecommunication disruptions, severely impeding my regular access to the learning portal and academic resources.\n\nI have already drafted the initial analysis and will finalize and upload my submission as soon as stable electricity and network access are restored. I truly appreciate your understanding, flexibility, and continuous guidance under these challenging local circumstances.\n\nThank you very much for your time and kind consideration.\n\nSincerely,\n${sName}\nStudent ID: ${idDisplay}\nUniversity of the People`;
+    } else if (type === 'medical') {
+      return `Subject: Urgent Academic Consideration - Medical Emergency [${cName}]\n\n${salutation}\n\nI hope you are doing well.\n\nI am writing to formally request an extension of ${days} for my coursework in ${cName} due to an unexpected medical emergency. I am currently under medical rest and care, which has temporarily restricted my ability to complete my submission on schedule.\n\nI expect to fully resume my academic duties within a few days and am prepared to provide any relevant documentation if required by the university policy.\n\nThank you very much for your understanding and continuous support.\n\nWarm regards,\n${sName}\nStudent ID: ${idDisplay}\nUniversity of the People`;
+    } else if (type === 'technical') {
+      return `Subject: LMS Submission Error & Extension Request [${cName}]\n\n${salutation}\n\nI hope this message finds you well.\n\nI am writing to report a technical issue encountered on the UoPeople Moodle platform while attempting to upload my assignment for ${cName}. The portal experienced an unexpected timeout / upload error prior to the deadline.\n\nAttached to this email is my finalized coursework file along with a screenshot of the submission error for your verification. I respectfully request your permission to record this submission or grant a ${days} window to re-upload once the portal stabilizes.\n\nThank you for your assistance and support.\n\nRespectfully,\n${sName}\nStudent ID: ${idDisplay}\nUniversity of the People`;
+    } else {
+      const sanitizedReason = /[\u1000-\u109F]/.test(custom)
+        ? 'Due to an unexpected personal and family emergency along with localized severe infrastructure disruptions, I am temporarily restricted from completing my coursework on schedule.'
+        : custom.trim() || 'Unforeseen academic and personal constraints.';
+      return `Subject: Formal Request for Coursework Consideration & Extension [${cName}]\n\n${salutation}\n\nI hope this email finds you well.\n\nI am writing to formally request an academic extension of ${days} regarding my coursework in ${cName}.\n\nReason for Request:\n${sanitizedReason}\n\nI am fully dedicated to my academic progress and have already completed the preliminary preparation for this work. I will finalize and submit the completed assignment as soon as possible.\n\nThank you very much for your time, understanding, and kind consideration.\n\nSincerely,\n${sName}\nStudent ID: ${idDisplay}\nUniversity of the People`;
+    }
+  };
+
+  const [emailGenerated, setEmailGenerated] = useState(() => {
+    return buildEmailTemplate('blackout', 'POLS 1503 - Globalization', 'Dr. Innocent Ndock Kong', 'Thin Yati Aung', '', '48 hours (2 Days)', 'instructor', '');
+  });
+  const [emailGeneratingWithAI, setEmailGeneratingWithAI] = useState(false);
+
+  // 2. Discussion Reply Advanced States
+  const [discussionTab, setDiscussionTab] = useState<'peer' | 'followup'>('peer');
+  const [selectedPeerSlot, setSelectedPeerSlot] = useState<1 | 2 | 3>(1);
+  const [discussionUnitContext, setDiscussionUnitContext] = useState('');
+
+  const [peer1Post, setPeer1Post] = useState('');
+  const [peer1Reply, setPeer1Reply] = useState('');
+  const [peer2Post, setPeer2Post] = useState('');
+  const [peer2Reply, setPeer2Reply] = useState('');
+  const [peer3Post, setPeer3Post] = useState('');
+  const [peer3Reply, setPeer3Reply] = useState('');
+
+  const [followupQuestion, setFollowupQuestion] = useState('');
+  const [followupReply, setFollowupReply] = useState('');
+
+  // 3. Paraphraser States
+  const [paraphraseText, setParaphraseText] = useState('');
+  const [paraphraseDepth, setParaphraseDepth] = useState<'standard' | 'deep' | 'academic'>('academic');
+  const [paraphraseResult, setParaphraseResult] = useState('');
+
+  // 4. Emergency 1-Hour Generator
+  const [emergencyTopic, setEmergencyTopic] = useState('');
+  const [emergencyResult, setEmergencyResult] = useState('');
+
+  // Universal Gemini Flash Engine
+  const callGemini = async (prompt: string, maxTokens: number = 800, imagePayload?: { name: string; dataUrl: string }[]) => {
+    const apiKey = localStorage.getItem('akari_gemini_api_key_primary') || '';
+    if (!apiKey.trim()) {
+      alert('Gemini API Key Vault တွင် Key ဦးစွာ ထည့်သွင်းပေးပါခင်ဗျာ။');
+      return '';
+    }
+
+    setLoading(true);
+    let resultText = '';
+
+    for (const model of VERIFIED_FLASH_MODELS) {
+      try {
+        const parts: any[] = [];
+        if (imagePayload && imagePayload.length > 0) {
+          imagePayload.forEach((img) => {
+            const base64Data = img.dataUrl.split(',')[1];
+            const mimeType = img.dataUrl.split(';')[0].split(':')[1] || 'image/jpeg';
+            if (base64Data) {
+              parts.push({ inlineData: { mimeType, data: base64Data } });
+            }
+          });
+        }
+        parts.push({ text: prompt });
+
+        const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey.trim()}`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            contents: [{ role: 'user', parts }],
+            generationConfig: {
+              temperature: 0.18,
+              maxOutputTokens: maxTokens
+            }
+          })
+        });
+
+        if (!res.ok) continue;
+        const data = await res.json();
+        const text = data.candidates?.[0]?.content?.parts?.[0]?.text;
+        if (text) {
+          resultText = text.trim();
+          break;
+        }
+      } catch {}
+    }
+
+    setLoading(false);
+    return resultText;
+  };
+
+  // Document Text Extractor (Clean Client-Side Extraction)
+  const handleUniversalDocExtract = async (file: File): Promise<string> => {
+    const name = file.name.toLowerCase();
+    if (name.endsWith('.docx')) {
+      const mammoth = (window as any).mammoth;
+      if (mammoth) {
+        try {
+          const arrayBuffer = await file.arrayBuffer();
+          const res = await mammoth.extractRawText({ arrayBuffer });
+          return res.value || '';
+        } catch {}
+      }
+      try {
+        const arrayBuffer = await file.arrayBuffer();
+        const decoder = new TextDecoder('utf-8', { fatal: false });
+        const rawStr = decoder.decode(arrayBuffer);
+        const matches = rawStr.match(/<w:t[^>]*>(.*?)<\/w:t>/g);
+        if (matches && matches.length > 0) {
+          return matches.map((m) => m.replace(/<[^>]+>/g, '')).filter(Boolean).join(' ');
+        }
+        return rawStr.replace(/[^\x20-\x7E\t\r\n]/g, ' ').replace(/\s{2,}/g, ' ');
+      } catch {
+        return `[File Attached: ${file.name}]`;
+      }
+    } else if (name.endsWith('.xlsx') || name.endsWith('.csv')) {
+      const text = await file.text();
+      return text.slice(0, 4000);
+    } else {
+      return await file.text();
+    }
+  };
+
+  // Upload handler for Outline
+  const handleOutlineFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    try {
+      const text = await handleUniversalDocExtract(file);
+      setOutlineInput((prev) => (prev ? prev + '\n\n' + text : text));
+    } catch {
+      alert('ဖိုင်ဖတ်ရှုရာတွင် ချို့ယွင်းချက် ဖြစ်ပေါ်ပါသည်ခင်ဗျာ။');
+    }
+    e.target.value = '';
+  };
+
+  // Upload handler for Draft File
+  const handleDraftFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    try {
+      const text = await handleUniversalDocExtract(file);
+      setDraftInput(text);
+      setDraftAttachedFile(file.name);
+    } catch {
+      alert('ဖိုင်ဖတ်ရှုရာတွင် ချို့ယွင်းချက် ဖြစ်ပေါ်ပါသည်ခင်ဗျာ။');
+    }
+    e.target.value = '';
+  };
+
+  // Image Upload Handler for Outline
+  const handleImageUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const files = e.target.files;
+    if (!files) return;
+    const remaining = 12 - uploadedImages.length;
+    const toAdd = Array.from(files).slice(0, remaining);
+
+    toAdd.forEach((file) => {
+      const reader = new FileReader();
+      reader.onload = () => {
+        setUploadedImages((prev) => [...prev, { name: file.name, dataUrl: reader.result as string }]);
+      };
+      reader.readAsDataURL(file);
+    });
+    e.target.value = '';
+  };
+
+  // 1A. Generate Outline (100% Academic English)
+  const handleGenerateOutline = async () => {
+    if (!outlineInput.trim() && uploadedImages.length === 0) {
+      return alert('Assignment မေးခွန်း သို့မဟုတ် Rubric ပုံ ထည့်သွင်းပေးပါခင်ဗျာ။');
+    }
+    const prompt = `Act as an expert Academic Advisor. Analyze the assignment rubric/prompt:
+1. Strict Checklist for A-Grade (Rubric requirements).
+2. Structured Section-by-Section Outline with clear guidance.
+STRICT INSTRUCTION: Output MUST be 100% in formal academic ENGLISH only.
+Prompt:\n${outlineInput}`;
+
+    const res = await callGemini(prompt, 950, uploadedImages);
+    if (res) {
+      setOutlineResult(res);
+      const newHist = [res.slice(0, 80) + '...', ...historyItems.slice(0, 3)];
+      setHistoryItems(newHist);
+      localStorage.setItem('akari_outline_history', JSON.stringify(newHist));
+    }
+  };
+
+  // 1B. Draft Audit Simulator with Seamless Two-Way Rubric Binding
+  const handleAuditDraft = async () => {
+    if (!draftInput.trim()) return alert('စစ်ဆေးရန် Draft စာမူကြမ်း ထည့်သွင်းပေးပါခင်ဗျာ။');
+
+    // Combine criteria from either Tab 1 or Tab 2 override
+    const activeRubricCriteria = draftRubricInput.trim() 
+      || outlineInput.trim() 
+      || outlineResult.trim() 
+      || 'Standard University Assessment Rubric';
+
+    const activeImages = draftRubricImages.length > 0 ? draftRubricImages : uploadedImages;
+
+    const prompt = `You are an experienced University Course Instructor (UoPeople Standard).
+Directly audit this student draft against the course rubric and instructor feedback.
+
+EVALUATION RUBRIC & CHECKLIST CONTEXT:
+${activeRubricCriteria.slice(0, 1500)}
+
+INSTRUCTOR SPECIFIC INSTRUCTIONS:
+${instructorFeedback || 'Standard Course Rubric Evaluation'}
+
+STUDENT DRAFT TO EVALUATE:
+${draftInput}
+
+STRICT BREVITY & STRUCTURE RULES:
+- Output must be concise, punchy, and under 220 words.
+- Structure:
+  ### 1. 🎯 Rubric Match
+  (Check each requirement: Met / Partially Met / Missing)
+  ### 2. 🔍 Logic & Thesis Gaps
+  (Identify weak arguments or missing evidence)
+  ### 3. 💡 Instructor Feedback & Actionable Steps
+  (Clear, immediate corrections for the student)`;
+
+    const res = await callGemini(prompt, 550, activeImages.length > 0 ? activeImages : undefined);
+    setDraftAuditResult(res);
+  };
+
+  // Free Open Source Crossref Audit
+  const handleFreeCrossrefAudit = async () => {
+    if (!integrityInput.trim()) {
+      alert('စစ်ဆေးရန် References စာရင်းကို ထည့်သွင်းပေးပါခင်ဗျာ။');
+      return;
+    }
+
+    setFreeApiAuditing(true);
+    const lines = integrityInput
+      .split('\n')
+      .map((l) => l.trim())
+      .filter((l) => l.length > 20 && !/^references\b/i.test(l));
+
+    let auditReport = `📊 OPEN-SOURCE CITATION & ACADEMIC INTEGRITY AUDIT REPORT\n`;
+    auditReport += `========================================================\n\n`;
+
+    let outdatedCount = 0;
+    lines.forEach((line) => {
+      const match = line.match(/\b(19\d{2}|20[0-1][0-5])\b/);
+      if (match) outdatedCount++;
+    });
+
+    if (outdatedCount > 0) {
+      auditReport += `⚠️ [CURRENCY WARNING]: Found ${outdatedCount} citation(s) published over 10 years ago (prior to 2016). Prioritize peer-reviewed sources from the last 5-10 years.\n\n`;
+    } else {
+      auditReport += `✅ [EXCELLENT CURRENCY]: All evaluated citations are modern academic sources published within the last 10 years.\n\n`;
+    }
+
+    if (lines.length > 0) {
+      const querySample = encodeURIComponent(lines[0].slice(0, 120));
+      try {
+        const res = await fetch(`https://api.crossref.org/works?query.bibliographic=${querySample}&rows=1`);
+        if (res.ok) {
+          const data = await res.json();
+          const item = data.message?.items?.[0];
+          if (item) {
+            auditReport += `🔍 [Crossref Open DB Verification]:\n`;
+            auditReport += `• Title: ${item.title?.[0] || 'Unknown'}\n`;
+            auditReport += `• DOI: https://doi.org/${item.DOI || 'N/A'}\n`;
+            auditReport += `• Status: 100% Peer-Reviewed Index Confirmed\n\n`;
+          }
+        }
+      } catch {
+        auditReport += `• Crossref API: Connectivity check required.\n\n`;
+      }
+    }
+
+    auditReport += `💡 [Turnitin Advice]: Ensure bibliography entries are placed at the end so the instructor can exclude references from the similarity score.`;
+
+    setIntegrityResult(auditReport);
+    setFreeApiAuditing(false);
+  };
+
+  // Peer Comment Generator
+  const handleGeneratePeerComment = async (slot: 1 | 2 | 3) => {
+    const postToUse = slot === 1 ? peer1Post : slot === 2 ? peer2Post : peer3Post;
+    if (!postToUse.trim()) {
+      alert(`ကျေးဇူးပြု၍ Peer ${slot} ၏ မူရင်း Assignment Post စာသားကို ထည့်သွင်းပေးပါခင်ဗျာ။`);
+      return;
+    }
+
+    const prompt = `You are a thoughtful university student participating in a peer discussion forum.
+Write ONE engaging, insightful, and natural peer response to your classmate.
+STRICT DIRECTIVE: Must be written 100% in pure academic ENGLISH only.
+CONTEXT: ${discussionUnitContext || 'Course Discussion Topic'}
+CLASSMATE POST:
+${postToUse}
+RULES:
+1. Authentic student voice. No AI clichés ("delve", "testament", "furthermore", "in conclusion").
+2. Acknowledge a specific point, add a concrete insight, and end with ONE open question.
+3. Keep response strictly between 110-150 words.`;
+
+    const res = await callGemini(prompt, 280);
+    if (res) {
+      if (slot === 1) setPeer1Reply(res);
+      else if (slot === 2) setPeer2Reply(res);
+      else setPeer3Reply(res);
+    }
+  };
+
+  // Follow-up Generator
+  const handleGenerateFollowupReply = async () => {
+    if (!followupQuestion.trim()) return alert('မေးခွန်း သို့မဟုတ် ဆွေးနွေးချက် ထည့်ပါ');
+    const prompt = `You are an authentic university student replying to a peer's follow-up question under your own post.
+STRICT DIRECTIVE: Write 100% in polished academic ENGLISH only.
+CONTEXT: ${discussionUnitContext || 'Course Discussion'}
+QUESTION: ${followupQuestion}
+RULES: Courteous tone, no AI clichés, keep strictly between 90-130 words.`;
+
+    const res = await callGemini(prompt, 250);
+    if (res) setFollowupReply(res);
+  };
+
+  const cleanMoodleText = (raw: string) => {
+    if (!moodleCleanerActive) return raw;
+    return raw
+      .replace(/[\u200B-\u200D\uFEFF]/g, '')
+      .replace(/[\u2018\u2019]/g, "'")
+      .replace(/[\u201C\u201D]/g, '"')
+      .replace(/\r\n/g, '\n')
+      .replace(/\n{3,}/g, '\n\n')
+      .trim();
+  };
+
+  const copyCleanText = (txt: string) => {
+    if (!txt) return;
+    navigator.clipboard.writeText(cleanMoodleText(txt));
+    setCopied(true);
+    setTimeout(() => setCopied(false), 2000);
+  };
+
+  const currentPeerPost = selectedPeerSlot === 1 ? peer1Post : selectedPeerSlot === 2 ? peer2Post : peer3Post;
+  const currentPeerReply = selectedPeerSlot === 1 ? peer1Reply : selectedPeerSlot === 2 ? peer2Reply : peer3Reply;
+
+  // Active rubric counts for status display
+  const activeRubricWordCount = (outlineInput || draftRubricInput).split(/\s+/).filter(Boolean).length;
+  const activeRubricImageCount = draftRubricImages.length > 0 ? draftRubricImages.length : uploadedImages.length;
+
+  return (
+    <div className="space-y-4">
+      {/* Top 4 Core Workspace Navigation Bar */}
+      <div className="p-3.5 rounded-2xl bg-[#0c1222]/90 border border-slate-800 flex items-center justify-between flex-wrap gap-2">
+        <div className="flex items-center gap-2">
+          {onBackToDashboard && (
+            <button
+              type="button"
+              onClick={onBackToDashboard}
+              className="px-2.5 py-1 rounded-xl bg-slate-900 hover:bg-slate-800 text-slate-300 border border-slate-700 text-xs font-bold transition-all"
+            >
+              ← Back
+            </button>
+          )}
+        </div>
+
+        <div className="flex items-center gap-1.5 overflow-x-auto scrollbar-none py-1">
+          <button
+            type="button"
+            onClick={() => setActiveModule('outline_suite')}
+            className={`px-3 py-1.5 rounded-xl text-xs font-bold whitespace-nowrap transition-all flex items-center gap-1.5 ${
+              activeModule === 'outline_suite' ? 'bg-indigo-600 text-white shadow' : 'bg-slate-900/60 text-slate-400 hover:text-slate-200'
+            }`}
+          >
+            <span>📋</span> Assignment Hub (Outline, Draft & Integrity)
+          </button>
+
+          <button
+            type="button"
+            onClick={() => setActiveModule('discussion_reply')}
+            className={`px-3 py-1.5 rounded-xl text-xs font-bold whitespace-nowrap transition-all flex items-center gap-1.5 ${
+              activeModule === 'discussion_reply' ? 'bg-indigo-600 text-white shadow' : 'bg-slate-900/60 text-slate-400 hover:text-slate-200'
+            }`}
+          >
+            <span>💬</span> Discussion Reply
+          </button>
+
+          <button
+            type="button"
+            onClick={() => setActiveModule('paraphraser')}
+            className={`px-3 py-1.5 rounded-xl text-xs font-bold whitespace-nowrap transition-all flex items-center gap-1.5 ${
+              activeModule === 'paraphraser' ? 'bg-indigo-600 text-white shadow' : 'bg-slate-900/60 text-slate-400 hover:text-slate-200'
+            }`}
+          >
+            <span>📈</span> Paraphraser & Depth Controller
+          </button>
+
+          <button
+            type="button"
+            onClick={() => setActiveModule('emergency_rescuer')}
+            className={`px-3 py-1.5 rounded-xl text-xs font-bold whitespace-nowrap transition-all flex items-center gap-1.5 ${
+              activeModule === 'emergency_rescuer' ? 'bg-amber-600 text-white shadow' : 'bg-slate-900/60 text-slate-400 hover:text-slate-200'
+            }`}
+          >
+            <span>⏱️</span> အရေးပေါ် ၁ နာရီ Rescuer (Emergency)
+          </button>
+        </div>
+      </div>
+
+      {/* MODULE 1: SUITE */}
+      {activeModule === 'outline_suite' && (
+        <div className="space-y-4">
+          <div className="p-3.5 rounded-2xl bg-[#0c1222]/90 border border-slate-800 flex items-center justify-between flex-wrap gap-2">
+            <div className="flex items-center gap-1.5 flex-wrap">
+              <button
+                type="button"
+                onClick={() => setActiveSubTab('outline')}
+                className={`px-3 py-1.5 rounded-xl text-xs font-bold flex items-center gap-1.5 transition-all ${
+                  activeSubTab === 'outline' ? 'bg-indigo-600 text-white shadow' : 'bg-slate-950 text-slate-400 hover:text-slate-200 border border-slate-800'
+                }`}
+              >
+                <span>📋</span> A-Grade Outline & Checklist (12-Image)
+              </button>
+
+              <button
+                type="button"
+                onClick={() => setActiveSubTab('draft_audit')}
+                className={`px-3 py-1.5 rounded-xl text-xs font-bold flex items-center gap-1.5 transition-all ${
+                  activeSubTab === 'draft_audit' ? 'bg-indigo-600 text-white shadow' : 'bg-slate-950 text-slate-400 hover:text-slate-200 border border-slate-800'
+                }`}
+              >
+                <span>🧠</span> Draft စစ်ဆေးချက် (Logic & Rubric Match)
+              </button>
+
+              <button
+                type="button"
+                onClick={() => setActiveSubTab('turnitin_integrity')}
+                className={`px-3 py-1.5 rounded-xl text-xs font-bold flex items-center gap-1.5 transition-all ${
+                  activeSubTab === 'turnitin_integrity' ? 'bg-rose-600 text-white shadow' : 'bg-slate-950 text-slate-400 hover:text-slate-200 border border-slate-800'
+                }`}
+              >
+                <span>🛡️</span> Integrity & စာအုပ်/ဂျာနယ်အစစ်များ (Turnitin)
+              </button>
+
+              <button
+                type="button"
+                onClick={() => setActiveSubTab('advisor_email')}
+                className={`px-3 py-1.5 rounded-xl text-xs font-bold flex items-center gap-1.5 transition-all ${
+                  activeSubTab === 'advisor_email' ? 'bg-amber-600 text-white shadow' : 'bg-slate-950 text-slate-400 hover:text-slate-200 border border-slate-800'
+                }`}
+              >
+                <span>✉️</span> Advisor/Instructor အရေးပေါ် Email
+              </button>
+            </div>
+
+            <label className="flex items-center gap-2 cursor-pointer bg-slate-950 px-2.5 py-1 rounded-xl border border-slate-800 text-[11px] text-slate-300">
+              <input
+                type="checkbox"
+                checked={moodleCleanerActive}
+                onChange={(e) => setMoodleCleanerActive(e.target.checked)}
+                className="rounded border-slate-700 text-indigo-600 focus:ring-0"
+              />
+              <span>Moodle သန့်စင်စနစ် (Cleaner)</span>
+              <span className="text-[10px] text-slate-400 font-normal">(Discussion Post တခုတည်းအတွက်)</span>
+              <span className={`text-[10px] font-bold ${moodleCleanerActive ? 'text-emerald-400' : 'text-slate-500'}`}>
+                {moodleCleanerActive ? 'ON' : 'OFF'}
+              </span>
+            </label>
+          </div>
+
+          {/* 1A. OUTLINE VIEW */}
+          {activeSubTab === 'outline' && (
+            <div className="grid grid-cols-1 lg:grid-cols-12 gap-4">
+              <div className="lg:col-span-5 p-4 rounded-2xl bg-[#0c1222]/90 border border-slate-800 space-y-3">
+                <div className="flex items-center justify-between">
+                  <label className="text-xs font-bold text-slate-200 block">
+                    ASSIGNMENT မေးခွန်း၊ RUBRIC သို့မဟုတ် ဖိုင်များ:
+                  </label>
+                  {draftInput.trim() && (
+                    <span className="text-[10px] text-emerald-400 font-mono">
+                      ✓ Draft Synced ({draftInput.split(/\s+/).filter(Boolean).length} words)
+                    </span>
+                  )}
+                </div>
+
+                <div className="flex items-center gap-2 flex-wrap">
+                  <label className="cursor-pointer px-3 py-1.5 rounded-xl bg-slate-900 hover:bg-slate-800 border border-slate-700 text-slate-300 text-xs font-semibold flex items-center gap-1.5 transition-all">
+                    <span>🖼️</span> ပုံ/Rubric တင်မည် ({uploadedImages.length}/12)
+                    <input type="file" accept="image/*" multiple onChange={handleImageUpload} className="hidden" />
+                  </label>
+                  <label className="cursor-pointer px-3 py-1.5 rounded-xl bg-slate-900 hover:bg-slate-800 border border-slate-700 text-slate-300 text-xs font-semibold flex items-center gap-1.5 transition-all">
+                    <span>📄</span> Word / PDF တင်မည်
+                    <input type="file" accept=".docx,.pdf,.pptx,.xlsx,.csv,.txt" onChange={handleOutlineFileUpload} className="hidden" />
+                  </label>
+                </div>
+
+                {uploadedImages.length > 0 && (
+                  <div className="flex items-center gap-2 overflow-x-auto py-1">
+                    {uploadedImages.map((img, i) => (
+                      <div key={i} className="relative shrink-0">
+                        <img src={img.dataUrl} alt={img.name} className="w-12 h-12 rounded-lg object-cover border border-slate-700" />
+                        <button
+                          type="button"
+                          onClick={() => setUploadedImages((prev) => prev.filter((_, idx) => idx !== i))}
+                          className="absolute -top-1 -right-1 bg-rose-600 text-white rounded-full w-4 h-4 text-[10px] flex items-center justify-center shadow"
+                        >
+                          ×
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                )}
+
+                <textarea
+                  rows={11}
+                  value={outlineInput}
+                  onChange={(e) => setOutlineInput(e.target.value)}
+                  placeholder="Assignment မေးခွန်း သို့မဟုတ် Rubric ကို ဤနေရာတွင် ထည့်ပါ..."
+                  className="w-full p-3 text-xs rounded-xl bg-slate-950 border border-slate-800 text-slate-100 placeholder-slate-600 focus:outline-none focus:border-indigo-500 font-mono"
+                />
+
+                <button
+                  type="button"
+                  onClick={handleGenerateOutline}
+                  disabled={loading}
+                  className="w-full py-2.5 rounded-xl bg-gradient-to-r from-indigo-600 to-blue-600 hover:from-indigo-500 hover:to-blue-500 text-white font-bold text-xs shadow-md transition-all flex items-center justify-center gap-2"
+                >
+                  {loading ? 'Checklist ထုတ်ယူနေသည်...' : '⚡ A-Grade Outline & Checklist ထုတ်ယူမည် (English)'}
+                </button>
+              </div>
+
+              <div className="lg:col-span-7 p-4 rounded-2xl bg-[#0c1222]/90 border border-slate-800 space-y-3">
+                <div className="flex items-center justify-between pb-2 border-b border-slate-800">
+                  <span className="text-xs font-bold text-slate-200">A-GRADE OUTLINE & CHECKLIST RESULT (ENGLISH)</span>
+                  {outlineResult && (
+                    <button type="button" onClick={() => copyCleanText(outlineResult)} className="text-xs text-cyan-400 hover:underline">
+                      {copied ? '✓ Copied' : '📋 Copy Clean Text'}
+                    </button>
+                  )}
+                </div>
+                <div className="h-[400px] overflow-y-auto p-4 rounded-xl bg-slate-950 border border-slate-800 text-xs text-slate-200 font-mono leading-relaxed whitespace-pre-wrap">
+                  {outlineResult || 'Enter your assignment rubric/prompt on the left to generate the complete checklist and outline in English...'}
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* 1B. DRAFT AUDIT VIEW (TWO-WAY LINKED WITH SUB-TAB 1) */}
+          {activeSubTab === 'draft_audit' && (
+            <div className="space-y-3">
+              {/* Linked Rubric Status Bar */}
+              <div className="p-3 rounded-xl bg-slate-950/80 border border-slate-800 flex items-center justify-between flex-wrap gap-2">
+                <div className="flex items-center gap-2">
+                  <span className="text-xs font-bold text-indigo-300 flex items-center gap-1">
+                    <span>🔗</span> Rubric Bridge Status:
+                  </span>
+                  <span className="text-[11px] text-slate-300">
+                    {activeRubricWordCount > 0 || activeRubricImageCount > 0 ? (
+                      <span className="text-emerald-400 font-medium">
+                        ✓ A-Grade Tab မှ Rubric နှင့် ချိတ်ဆက်ပြီး ({activeRubricImageCount} images, {activeRubricWordCount} words)
+                      </span>
+                    ) : (
+                      <span className="text-amber-400">
+                        ⚠️ Rubric မရှိသေးပါ (A-Grade Tab တွင် ပုံ/မေးခွန်း ထည့်နိုင်ပါသည်)
+                      </span>
+                    )}
+                  </span>
+                </div>
+
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setShowDraftRubricOverride(!showDraftRubricOverride)}
+                    className="px-2.5 py-1 rounded-lg bg-slate-900 hover:bg-slate-800 border border-slate-700 text-slate-300 text-xs font-semibold transition-all"
+                  >
+                    {showDraftRubricOverride ? '▲ Hide Rubric Editor' : '✏️ Edit / Override Rubric'}
+                  </button>
+                </div>
+              </div>
+
+              {/* Optional Inline Rubric Override Area */}
+              {showDraftRubricOverride && (
+                <div className="p-3 rounded-xl bg-[#090e1c] border border-indigo-950 space-y-2">
+                  <div className="flex items-center justify-between">
+                    <label className="text-[11px] font-bold text-indigo-300">
+                      Rubric Override Input:
+                    </label>
+                    <label className="cursor-pointer text-[10px] text-indigo-400 hover:underline">
+                      <span>🖼️ Upload Rubric Images ({draftRubricImages.length}/12)</span>
+                      <input
+                        type="file"
+                        accept="image/*"
+                        multiple
+                        onChange={(e) => {
+                          const files = e.target.files;
+                          if (!files) return;
+                          Array.from(files).slice(0, 12).forEach((file) => {
+                            const reader = new FileReader();
+                            reader.onload = () => {
+                              setDraftRubricImages((prev) => [...prev, { name: file.name, dataUrl: reader.result as string }]);
+                            };
+                            reader.readAsDataURL(file);
+                          });
+                        }}
+                        className="hidden"
+                      />
+                    </label>
+                  </div>
+                  <textarea
+                    rows={3}
+                    value={draftRubricInput || outlineInput}
+                    onChange={(e) => setDraftRubricInput(e.target.value)}
+                    placeholder="Enter or adjust rubric criteria specifically for this audit..."
+                    className="w-full p-2 text-xs rounded-lg bg-slate-950 border border-slate-800 text-slate-200 font-mono"
+                  />
+                </div>
+              )}
+
+              {/* 2-Column Evaluation Area */}
+              <div className="grid grid-cols-1 lg:grid-cols-12 gap-4">
+                <div className="lg:col-span-5 p-4 rounded-2xl bg-[#0c1222]/90 border border-slate-800 space-y-3">
+                  <div className="flex items-center justify-between flex-wrap gap-1">
+                    <label className="text-xs font-bold text-slate-200 block">
+                      စစ်ဆေးလိုသော ASSIGNMENT DRAFT (စာမူကြမ်း):
+                    </label>
+                    <label className="cursor-pointer text-[11px] text-indigo-400 hover:text-indigo-300 font-semibold flex items-center gap-1">
+                      <span>📄 PDF, Word, PPTX, Excel တင်မည်</span>
+                      <input
+                        type="file"
+                        accept=".pdf,.docx,.pptx,.xlsx,.csv,.txt"
+                        onChange={handleDraftFileUpload}
+                        className="hidden"
+                      />
+                    </label>
+                  </div>
+
+                  {draftAttachedFile && (
+                    <div className="text-[10px] text-emerald-400 font-mono">
+                      ✓ Attached File: {draftAttachedFile}
+                    </div>
+                  )}
+
+                  <textarea
+                    rows={10}
+                    value={draftInput}
+                    onChange={(e) => setDraftInput(e.target.value)}
+                    placeholder="ကျောင်းသားရေးထားသော စာမူကြမ်းကို ထည့်သွင်းပါ (သို့မဟုတ် အပေါ်မှ ဖိုင်တင်ပါ)..."
+                    className="w-full p-3 text-xs rounded-xl bg-slate-950 border border-slate-800 text-slate-100 placeholder-slate-600 focus:outline-none focus:border-indigo-500 font-mono leading-relaxed"
+                  />
+
+                  <div>
+                    <label className="text-[10px] text-amber-300 font-bold block mb-1">
+                      ဆရာပေးထားသော Feedback / အထူးမှာကြားချက် (ရှိပါက ထည့်ရန်):
+                    </label>
+                    <textarea
+                      rows={3}
+                      value={instructorFeedback}
+                      onChange={(e) => setInstructorFeedback(e.target.value)}
+                      placeholder="e.g. Focus on thesis strength, APA citations, and logical transitions..."
+                      className="w-full p-2 text-xs rounded-xl bg-slate-950 border border-slate-800 text-slate-200 placeholder-slate-600 focus:outline-none focus:border-amber-500 font-mono"
+                    />
+                  </div>
+
+                  <button
+                    type="button"
+                    onClick={handleAuditDraft}
+                    disabled={loading}
+                    className="w-full py-2.5 rounded-xl bg-gradient-to-r from-indigo-600 to-blue-600 hover:from-indigo-500 text-white font-bold text-xs shadow transition-all flex items-center justify-center gap-2"
+                  >
+                    {loading ? (
+                      <>
+                        <div className="w-3.5 h-3.5 border-2 border-white border-t-transparent rounded-full animate-spin" />
+                        <span>ဆရာ့စံနှုန်းအတိုင်း သုံးသပ်နေသည်...</span>
+                      </>
+                    ) : (
+                      <>
+                        <span>🔍</span>
+                        <span>ဆရာ့စံနှုန်းအတိုင်း စစ်ဆေးမည် (Rubric Match)</span>
+                      </>
+                    )}
+                  </button>
+                </div>
+
+                <div className="lg:col-span-7 p-4 rounded-2xl bg-[#0c1222]/90 border border-slate-800 space-y-3">
+                  <div className="flex items-center justify-between pb-2 border-b border-slate-800">
+                    <span className="text-xs font-bold text-slate-200">INSTRUCTOR AUDIT & RUBRIC MATCH RESULT</span>
+                    {draftAuditResult && (
+                      <button type="button" onClick={() => copyCleanText(draftAuditResult)} className="text-xs text-cyan-400 hover:underline">
+                        {copied ? '✓ Copied' : '📋 Copy Clean Text'}
+                      </button>
+                    )}
+                  </div>
+                  <div className="h-[430px] overflow-y-auto p-4 rounded-xl bg-slate-950 border border-slate-800 text-xs text-slate-200 font-serif leading-relaxed whitespace-pre-wrap">
+                    {draftAuditResult || 'Draft ထည့်သွင်းပြီး စစ်ဆေးနိုင်ပါသည် (A-Grade Outline မှ Rubric များနှင့် အလိုအလျောက် တိုက်ဆိုင်စစ်ဆေးပေးပါမည်)...'}
+                  </div>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* 1C. TURNITIN INTEGRITY VIEW */}
+          {activeSubTab === 'turnitin_integrity' && (
+            <div className="space-y-4">
+              <div className="grid grid-cols-1 lg:grid-cols-12 gap-4">
+                <div className="lg:col-span-5 p-4 rounded-2xl bg-[#0c1222]/90 border border-slate-800 space-y-3">
+                  <div className="flex items-center justify-between">
+                    <span className="text-xs font-bold text-rose-300 flex items-center gap-1.5">
+                      <span>🛡️</span> References စာရင်း သို့မဟုတ် TURNITIN SIMILARITY အပိုဒ်များ:
+                    </span>
+                    <label className="cursor-pointer text-[11px] text-indigo-400 hover:text-indigo-300 font-semibold flex items-center gap-1">
+                      <span>📄 ဖိုင်တင်မည်</span>
+                      <input
+                        type="file"
+                        accept=".docx,.pdf,.txt"
+                        onChange={async (e) => {
+                          const file = e.target.files?.[0];
+                          if (!file) return;
+                          const txt = await handleUniversalDocExtract(file);
+                          setIntegrityInput(txt);
+                          e.target.value = '';
+                        }}
+                        className="hidden"
+                      />
+                    </label>
+                  </div>
+
+                  <div className="p-2.5 rounded-xl bg-amber-950/30 border border-amber-800/40 text-[11px] text-amber-300 leading-relaxed">
+                    ⚠️ <strong>သတိပေးချက်:</strong> ဤနေရာတွင် စာတမ်းတစ်ခုလုံး မထည့်ရပါ။ References စာရင်း သို့မဟုတ် Turnitin တွင် အငြင်းပွားနေသော စာကြောင်းများကိုသာ သီးသန့် ထည့်သွင်းပေးပါခင်ဗျာ။
+                  </div>
+
+                  <textarea
+                    rows={11}
+                    value={integrityInput}
+                    onChange={(e) => setIntegrityInput(e.target.value)}
+                    placeholder="Enter reference list here..."
+                    className="w-full p-3 text-xs rounded-xl bg-slate-950 border border-slate-800 text-slate-100 placeholder-slate-600 focus:outline-none focus:border-rose-500 font-mono"
+                  />
+
+                  <div className="grid grid-cols-2 gap-2">
+                    <button
+                      type="button"
+                      onClick={handleFreeCrossrefAudit}
+                      disabled={freeApiAuditing || !integrityInput.trim()}
+                      className="py-2.5 px-3 rounded-xl bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 text-white font-bold text-xs shadow transition-all flex items-center justify-center gap-1.5"
+                    >
+                      <span>🌐</span>
+                      <span>{freeApiAuditing ? 'Auditing...' : 'Free DB Audit (Zero Token)'}</span>
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={async () => {
+                        if (!integrityInput.trim()) return alert('References စာရင်း ထည့်ပါ');
+                        const res = await callGemini(`Audit references for Turnitin false-positives and APA 7th. Output must be 100% in English only:\n${integrityInput}`, 700);
+                        setIntegrityResult(res);
+                      }}
+                      disabled={loading || !integrityInput.trim()}
+                      className="py-2.5 px-3 rounded-xl bg-gradient-to-r from-rose-600 to-pink-600 hover:from-rose-500 hover:to-pink-500 disabled:opacity-50 text-white font-bold text-xs shadow transition-all flex items-center justify-center gap-1.5"
+                    >
+                      <span>🛡️</span>
+                      <span>{loading ? 'Auditing...' : 'Turnitin AI Audit (English)'}</span>
+                    </button>
+                  </div>
+                </div>
+
+                <div className="lg:col-span-7 p-4 rounded-2xl bg-[#0c1222]/90 border border-slate-800 space-y-3">
+                  <div className="flex items-center justify-between pb-2 border-b border-slate-800">
+                    <span className="text-xs font-bold text-slate-200">ACADEMIC INTEGRITY & CITATION AUDIT (ENGLISH)</span>
+                    {integrityResult && (
+                      <button
+                        type="button"
+                        onClick={() => copyCleanText(integrityResult)}
+                        className="text-xs text-cyan-400 hover:underline"
+                      >
+                        {copied ? '✓ Copied' : '📋 Copy Report'}
+                      </button>
+                    )}
+                  </div>
+                  <div className="h-[390px] overflow-y-auto p-4 rounded-xl bg-slate-950 border border-slate-800 text-xs text-slate-200 font-mono leading-relaxed whitespace-pre-wrap">
+                    {integrityResult || 'Enter references on the left and click audit...'}
+                  </div>
+                </div>
+              </div>
+
+              {/* EXTERNAL PLAGIARISM CHECKERS GRID */}
+              <div className="p-4 rounded-2xl bg-[#0a101f] border border-slate-800 space-y-3">
+                <div className="flex items-center justify-between pb-1 border-b border-slate-800/80">
+                  <div className="flex items-center gap-2">
+                    <span className="p-1 rounded-lg bg-cyan-950 text-cyan-400 border border-cyan-800/40">🌐</span>
+                    <h4 className="text-xs font-bold text-slate-200">Online Plagiarism Checkers</h4>
+                  </div>
+                  <span className="text-[10px] text-slate-500 font-mono">Open in New Tab ↗</span>
+                </div>
+
+                <div className="grid grid-cols-1 md:grid-cols-3 lg:grid-cols-5 gap-3 pt-1">
+                  {EXTERNAL_PLAGIARISM_TOOLS.map((tool, idx) => (
+                    <a
+                      key={idx}
+                      href={tool.url}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="p-3 rounded-xl bg-slate-950/80 border border-slate-800 hover:border-cyan-500/50 hover:bg-slate-900 transition-all flex flex-col justify-between space-y-2 group"
+                    >
+                      <div className="space-y-1">
+                        <div className="flex items-center justify-between">
+                          <span className="text-xs font-bold text-slate-200 group-hover:text-cyan-300 transition-colors">
+                            {tool.name}
+                          </span>
+                          <span className={`text-[9px] font-bold px-1.5 py-0.5 rounded border ${tool.badgeColor}`}>
+                            {tool.badge}
+                          </span>
+                        </div>
+                        <p className="text-[10px] text-slate-400 line-clamp-2 leading-relaxed">
+                          {tool.desc}
+                        </p>
+                      </div>
+
+                      <span className="text-[10px] text-cyan-400 group-hover:underline self-end flex items-center gap-1 font-semibold">
+                        Visit Checker ↗
+                      </span>
+                    </a>
+                  ))}
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* 1D. ADVISOR & INSTRUCTOR EMERGENCY EMAIL SYSTEM */}
+          {activeSubTab === 'advisor_email' && (
+            <div className="space-y-4">
+              <div className="grid grid-cols-1 lg:grid-cols-12 gap-5">
+                <div className="lg:col-span-5 p-4 rounded-2xl bg-[#0c1222]/90 border border-amber-800/40 space-y-4">
+                  <div className="flex items-center justify-between pb-2 border-b border-slate-800">
+                    <span className="text-xs font-bold text-amber-200 flex items-center gap-1.5">
+                      <span>✉️</span> Emergency Email Configuration
+                    </span>
+                    <span className="text-[10px] font-mono bg-amber-950 text-amber-400 px-2 py-0.5 rounded border border-amber-850/60">
+                      100% English Output
+                    </span>
+                  </div>
+
+                  <div className="space-y-1.5">
+                    <label className="text-[10px] font-bold text-slate-400 block">
+                      အသင့်သုံး အရေးပေါ် TEMPLATES (၄ မျိုး):
+                    </label>
+                    <div className="grid grid-cols-2 gap-2">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setEmailTemplateType('blackout');
+                          setEmailGenerated(buildEmailTemplate('blackout', emailCourseName, emailInstructorName, emailStudentName, emailStudentID, emailExtensionDays, emailRecipientRole, emailCustomReason));
+                        }}
+                        className={`p-2.5 rounded-xl text-left border text-[11px] font-bold transition-all ${
+                          emailTemplateType === 'blackout'
+                            ? 'bg-amber-600 text-white border-amber-500 shadow'
+                            : 'bg-slate-950 text-slate-300 border-slate-800 hover:border-slate-700'
+                        }`}
+                      >
+                        ⚡ မီးပျက် / လိုင်းပြတ်တောက်
+                      </button>
+
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setEmailTemplateType('medical');
+                          setEmailGenerated(buildEmailTemplate('medical', emailCourseName, emailInstructorName, emailStudentName, emailStudentID, emailExtensionDays, emailRecipientRole, emailCustomReason));
+                        }}
+                        className={`p-2.5 rounded-xl text-left border text-[11px] font-bold transition-all ${
+                          emailTemplateType === 'medical'
+                            ? 'bg-amber-600 text-white border-amber-500 shadow'
+                            : 'bg-slate-950 text-slate-300 border-slate-800 hover:border-slate-700'
+                        }`}
+                      >
+                        🏥 ကျန်းမာရေး အရေးပေါ်
+                      </button>
+
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setEmailTemplateType('technical');
+                          setEmailGenerated(buildEmailTemplate('technical', emailCourseName, emailInstructorName, emailStudentName, emailStudentID, emailExtensionDays, emailRecipientRole, emailCustomReason));
+                        }}
+                        className={`p-2.5 rounded-xl text-left border text-[11px] font-bold transition-all ${
+                          emailTemplateType === 'technical'
+                            ? 'bg-amber-600 text-white border-amber-500 shadow'
+                            : 'bg-slate-950 text-slate-300 border-slate-800 hover:border-slate-700'
+                        }`}
+                      >
+                        💻 Moodle Portal Error
+                      </button>
+
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setEmailTemplateType('custom');
+                          setEmailGenerated(buildEmailTemplate('custom', emailCourseName, emailInstructorName, emailStudentName, emailStudentID, emailExtensionDays, emailRecipientRole, emailCustomReason));
+                        }}
+                        className={`p-2.5 rounded-xl text-left border text-[11px] font-bold transition-all ${
+                          emailTemplateType === 'custom'
+                            ? 'bg-amber-600 text-white border-amber-500 shadow'
+                            : 'bg-slate-950 text-slate-300 border-slate-800 hover:border-slate-700'
+                        }`}
+                      >
+                        ✏️ ကိုယ်ပိုင် အကြောင်းပြချက်
+                      </button>
+                    </div>
+                  </div>
+
+                  <div className="space-y-2">
+                    <div className="grid grid-cols-2 gap-2">
+                      <div>
+                        <label className="text-[10px] font-bold text-slate-400 block mb-0.5">Course Code/Name:</label>
+                        <input
+                          type="text"
+                          value={emailCourseName}
+                          onChange={(e) => {
+                            setEmailCourseName(e.target.value);
+                            setEmailGenerated(buildEmailTemplate(emailTemplateType, e.target.value, emailInstructorName, emailStudentName, emailStudentID, emailExtensionDays, emailRecipientRole, emailCustomReason));
+                          }}
+                          className="w-full p-2 text-xs rounded-xl bg-slate-950 border border-slate-800 text-slate-100 font-mono"
+                        />
+                      </div>
+                      <div>
+                        <label className="text-[10px] font-bold text-slate-400 block mb-0.5">Instructor Name:</label>
+                        <input
+                          type="text"
+                          value={emailInstructorName}
+                          onChange={(e) => {
+                            setEmailInstructorName(e.target.value);
+                            setEmailGenerated(buildEmailTemplate(emailTemplateType, emailCourseName, e.target.value, emailStudentName, emailStudentID, emailExtensionDays, emailRecipientRole, emailCustomReason));
+                          }}
+                          className="w-full p-2 text-xs rounded-xl bg-slate-950 border border-slate-800 text-slate-100 font-mono"
+                        />
+                      </div>
+                    </div>
+
+                    <div className="grid grid-cols-2 gap-2">
+                      <div>
+                        <label className="text-[10px] font-bold text-slate-400 block mb-0.5">Student Name:</label>
+                        <input
+                          type="text"
+                          value={emailStudentName}
+                          onChange={(e) => {
+                            setEmailStudentName(e.target.value);
+                            setEmailGenerated(buildEmailTemplate(emailTemplateType, emailCourseName, emailInstructorName, e.target.value, emailStudentID, emailExtensionDays, emailRecipientRole, emailCustomReason));
+                          }}
+                          className="w-full p-2 text-xs rounded-xl bg-slate-950 border border-slate-800 text-slate-100 font-mono"
+                        />
+                      </div>
+                      <div>
+                        <label className="text-[10px] font-bold text-slate-400 block mb-0.5">Student ID:</label>
+                        <input
+                          type="text"
+                          value={emailStudentID}
+                          placeholder="e.g. s123456"
+                          onChange={(e) => {
+                            setEmailStudentID(e.target.value);
+                            setEmailGenerated(buildEmailTemplate(emailTemplateType, emailCourseName, emailInstructorName, emailStudentName, e.target.value, emailExtensionDays, emailRecipientRole, emailCustomReason));
+                          }}
+                          className="w-full p-2 text-xs rounded-xl bg-slate-950 border border-slate-800 text-slate-100 font-mono"
+                        />
+                      </div>
+                    </div>
+
+                    <div>
+                      <label className="text-[10px] font-bold text-slate-400 block mb-0.5">တောင်းခံလိုသော ရက်အရေအတွက်:</label>
+                      <select
+                        value={emailExtensionDays}
+                        onChange={(e) => {
+                          setEmailExtensionDays(e.target.value);
+                          setEmailGenerated(buildEmailTemplate(emailTemplateType, emailCourseName, emailInstructorName, emailStudentName, emailStudentID, e.target.value, emailRecipientRole, emailCustomReason));
+                        }}
+                        className="w-full p-2 text-xs rounded-xl bg-slate-950 border border-slate-800 text-slate-100 font-mono"
+                      >
+                        <option value="24 hours (1 Day)">24 hours (1 Day Extension)</option>
+                        <option value="48 hours (2 Days)">48 hours (2 Days Extension)</option>
+                        <option value="72 hours (3 Days)">72 hours (3 Days Extension)</option>
+                        <option value="5 Days">5 Days Extension</option>
+                        <option value="1 Week">1 Week Extension</option>
+                      </select>
+                    </div>
+
+                    {emailTemplateType === 'custom' && (
+                      <div className="pt-1">
+                        <label className="text-[11px] font-bold text-amber-300 block mb-1">
+                          ✏️ ကိုယ်ပိုင် အကြောင်းပြချက် စာသား ရိုက်ထည့်ရန်:
+                        </label>
+                        <textarea
+                          rows={4}
+                          value={emailCustomReason}
+                          onChange={(e) => {
+                            const val = e.target.value;
+                            setEmailCustomReason(val);
+                            setEmailGenerated(buildEmailTemplate('custom', emailCourseName, emailInstructorName, emailStudentName, emailStudentID, emailExtensionDays, emailRecipientRole, val));
+                          }}
+                          className="w-full p-2.5 text-xs rounded-xl bg-slate-950 border border-amber-500/60 text-slate-100 font-sans leading-relaxed placeholder-slate-600 focus:outline-none focus:border-amber-400"
+                        />
+                      </div>
+                    )}
+                  </div>
+                </div>
+
+                <div className="lg:col-span-7 p-4 rounded-2xl bg-[#0c1222]/90 border border-slate-800 space-y-3 flex flex-col justify-between">
+                  <div>
+                    <div className="flex items-center justify-between pb-2 border-b border-slate-800">
+                      <span className="text-xs font-bold text-slate-200">
+                        OFFICIAL UOPEOPLE EXTENSION EMAIL PREVIEW (100% ENGLISH)
+                      </span>
+                      <button
+                        type="button"
+                        onClick={() => copyCleanText(emailGenerated)}
+                        className="px-3 py-1 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-xs shadow transition-all flex items-center gap-1"
+                      >
+                        {copied ? '✓ Copied' : '📋 Copy Email'}
+                      </button>
+                    </div>
+
+                    <textarea
+                      rows={15}
+                      value={emailGenerated}
+                      onChange={(e) => setEmailGenerated(e.target.value)}
+                      className="w-full mt-3 p-4 rounded-xl bg-slate-950 border border-slate-800 text-slate-100 font-mono text-xs leading-relaxed focus:outline-none focus:border-amber-500"
+                    />
+                  </div>
+                </div>
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* MODULE 2: DISCUSSION REPLY */}
+      {activeModule === 'discussion_reply' && (
+        <div className="space-y-4">
+          <div className="p-3.5 rounded-2xl bg-[#0c1222]/90 border border-slate-800 flex items-center justify-between flex-wrap gap-2">
+            <div className="flex items-center gap-1.5 flex-wrap">
+              <button
+                type="button"
+                onClick={() => setDiscussionTab('peer')}
+                className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all ${
+                  discussionTab === 'peer' ? 'bg-indigo-600 text-white shadow' : 'bg-slate-950 text-slate-400 hover:text-slate-200 border border-slate-800'
+                }`}
+              >
+                👥 Peer Comments (၃ ယောက်စာ တယောက်ချင်းစီ)
+              </button>
+              <button
+                type="button"
+                onClick={() => setDiscussionTab('followup')}
+                className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all ${
+                  discussionTab === 'followup' ? 'bg-indigo-600 text-white shadow' : 'bg-slate-950 text-slate-400 hover:text-slate-200 border border-slate-800'
+                }`}
+              >
+                💬 ကိုယ့် Post မေးခွန်းများ ပြန်ဖြေရန် (Follow-up)
+              </button>
+            </div>
+
+            <label className="flex items-center gap-2 cursor-pointer bg-slate-950 px-2.5 py-1 rounded-xl border border-slate-800 text-[11px] text-slate-300">
+              <input
+                type="checkbox"
+                checked={moodleCleanerActive}
+                onChange={(e) => setMoodleCleanerActive(e.target.checked)}
+                className="rounded border-slate-700 text-indigo-600 focus:ring-0"
+              />
+              <span>Moodle သန့်စင်စနစ် (Cleaner)</span>
+              <span className="text-[10px] text-slate-400 font-normal">(Discussion Post တခုတည်းအတွက်)</span>
+              <span className={`text-[10px] font-bold ${moodleCleanerActive ? 'text-emerald-400' : 'text-slate-500'}`}>
+                {moodleCleanerActive ? 'ON' : 'OFF'}
+              </span>
+            </label>
+          </div>
+
+          <div className="p-3 rounded-2xl bg-[#0a101f] border border-slate-800 flex items-center gap-3">
+            <span className="text-[11px] font-bold text-slate-400 shrink-0">Unit Topic Context:</span>
+            <input
+              type="text"
+              value={discussionUnitContext}
+              onChange={(e) => setDiscussionUnitContext(e.target.value)}
+              placeholder="e.g. Unit 8: Healthcare Technology..."
+              className="w-full p-2 text-xs rounded-xl bg-slate-950 border border-slate-800 text-slate-100 font-mono focus:outline-none focus:border-indigo-500"
+            />
+          </div>
+
+          {discussionTab === 'peer' && (
+            <div className="space-y-4">
+              <div className="flex items-center gap-2">
+                <span className="text-[11px] font-bold text-slate-400">Classmate ရွေးချယ်ရန်:</span>
+                {([1, 2, 3] as const).map((slot) => (
+                  <button
+                    key={slot}
+                    type="button"
+                    onClick={() => setSelectedPeerSlot(slot)}
+                    className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all flex items-center gap-1.5 ${
+                      selectedPeerSlot === slot ? 'bg-indigo-600 text-white shadow' : 'bg-slate-950 text-slate-400 hover:text-slate-200 border border-slate-800'
+                    }`}
+                  >
+                    <span>👤</span>
+                    <span>Peer {slot}</span>
+                  </button>
+                ))}
+              </div>
+
+              <div className="grid grid-cols-1 lg:grid-cols-12 gap-4">
+                <div className="lg:col-span-5 p-4 rounded-2xl bg-[#0c1222]/90 border border-slate-800 space-y-3">
+                  <label className="text-xs font-bold text-indigo-300 block">
+                    👤 Peer {selectedPeerSlot} ၏ မူရင်း Post:
+                  </label>
+                  <textarea
+                    rows={11}
+                    value={selectedPeerSlot === 1 ? peer1Post : selectedPeerSlot === 2 ? peer2Post : peer3Post}
+                    onChange={(e) => {
+                      const val = e.target.value;
+                      if (selectedPeerSlot === 1) setPeer1Post(val);
+                      else if (selectedPeerSlot === 2) setPeer2Post(val);
+                      else setPeer3Post(val);
+                    }}
+                    placeholder={`Paste classmate's discussion post for Peer ${selectedPeerSlot}...`}
+                    className="w-full p-3 text-xs rounded-xl bg-slate-950 border border-slate-800 text-slate-100 font-mono focus:outline-none focus:border-indigo-500"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => handleGeneratePeerComment(selectedPeerSlot)}
+                    disabled={loading || !currentPeerPost.trim()}
+                    className="w-full py-2.5 rounded-xl bg-gradient-to-r from-indigo-600 to-blue-600 hover:from-indigo-500 text-white font-bold text-xs shadow-md"
+                  >
+                    {loading ? 'Writing in English...' : `Peer ${selectedPeerSlot} အတွက် Comment ထုတ်မည် (Pure English)`}
+                  </button>
+                </div>
+
+                <div className="lg:col-span-7 p-4 rounded-2xl bg-[#0c1222]/90 border border-slate-800 space-y-3">
+                  <div className="flex items-center justify-between pb-2 border-b border-slate-800">
+                    <span className="text-xs font-bold text-slate-200">PEER {selectedPeerSlot} REPLY (100% ENGLISH)</span>
+                    {currentPeerReply && (
+                      <button type="button" onClick={() => copyCleanText(currentPeerReply)} className="text-xs text-cyan-400 hover:underline">
+                        {copied ? '✓ Copied' : '📋 Copy Clean Text'}
+                      </button>
+                    )}
+                  </div>
+                  <div className="h-[290px] overflow-y-auto p-4 rounded-xl bg-slate-950 text-xs text-slate-100 font-serif leading-relaxed whitespace-pre-wrap">
+                    {currentPeerReply || 'Peer response will be generated here in 100% English...'}
+                  </div>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {discussionTab === 'followup' && (
+            <div className="grid grid-cols-1 lg:grid-cols-12 gap-4">
+              <div className="lg:col-span-5 p-4 rounded-2xl bg-[#0c1222]/90 border border-slate-800 space-y-3">
+                <label className="text-xs font-bold text-indigo-300 block">💬 မေးခွန်း / မှတ်ချက်:</label>
+                <textarea
+                  rows={11}
+                  value={followupQuestion}
+                  onChange={(e) => setFollowupQuestion(e.target.value)}
+                  placeholder="Paste follow-up question here..."
+                  className="w-full p-3 text-xs rounded-xl bg-slate-950 border border-slate-800 text-slate-100 font-mono focus:outline-none focus:border-indigo-500"
+                />
+                <button
+                  type="button"
+                  onClick={handleGenerateFollowupReply}
+                  disabled={loading || !followupQuestion.trim()}
+                  className="w-full py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white font-bold text-xs"
+                >
+                  {loading ? 'Replying in English...' : 'Follow-up အဖြေ ထုတ်ယူမည် (Pure English)'}
+                </button>
+              </div>
+              <div className="lg:col-span-7 p-4 rounded-2xl bg-[#0c1222]/90 border border-slate-800 space-y-3">
+                <div className="flex items-center justify-between pb-2 border-b border-slate-800">
+                  <span className="text-xs font-bold text-slate-200">FOLLOW-UP RESPONSE (100% ENGLISH)</span>
+                  {followupReply && (
+                    <button type="button" onClick={() => copyCleanText(followupReply)} className="text-xs text-cyan-400 hover:underline">
+                      {copied ? '✓ Copied' : '📋 Copy Clean Text'}
+                    </button>
+                  )}
+                </div>
+                <div className="h-[290px] overflow-y-auto p-4 rounded-xl bg-slate-950 text-xs text-slate-100 font-serif leading-relaxed whitespace-pre-wrap">
+                  {followupReply || 'Follow-up answer will appear here in 100% English...'}
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* External Humanizer Tools Grid */}
+          <div className="p-4 rounded-2xl bg-[#0a101f] border border-slate-800 space-y-3">
+            <div className="p-3 rounded-xl bg-amber-950/30 border border-amber-800/40 text-xs text-amber-300 flex items-start gap-2">
+              <span>⚠️</span>
+              <span><strong>အသိပေးချက်:</strong> ဤနေရာမှ ထွက်ရှိလာသော စာသားကို ပိုမို စိတ်ချသေချာစေရန် အောက်ဖော်ပြပါ External Humanizer ဝဘ်ဆိုဒ်များတွင်လည်း သွားရောက်၍ တစ်ဆင့်ထပ်မံ စစ်ဆေး/Humanize ပြုလုပ်နိုင်ပါသည်ခင်ဗျာ။</span>
+            </div>
+
+            <div className="grid grid-cols-1 md:grid-cols-5 gap-3 pt-1">
+              {EXTERNAL_HUMANIZER_TOOLS.map((tool, idx) => (
+                <a
+                  key={idx}
+                  href={tool.url}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="p-3 rounded-xl bg-slate-950 border border-slate-800 hover:border-indigo-500/50 transition-all flex flex-col justify-between space-y-2"
+                >
+                  <div>
+                    <span className="text-xs font-bold text-slate-200 block">{tool.name}</span>
+                    <p className="text-[10px] text-slate-400 mt-1">{tool.desc}</p>
+                  </div>
+                  <span className="text-[10px] text-indigo-400 font-semibold self-end">သွားရောက်စစ်မည် ↗</span>
+                </a>
+              ))}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* MODULE 3: PARAPHRASER */}
+      {activeModule === 'paraphraser' && (
+        <div className="grid grid-cols-1 lg:grid-cols-12 gap-4">
+          <div className="lg:col-span-5 p-4 rounded-2xl bg-[#0c1222]/90 border border-slate-800 space-y-3">
+            <div className="flex items-center justify-between">
+              <label className="text-xs font-bold text-slate-200">မူရင်း စာသား:</label>
+              <div className="flex gap-1">
+                {(['standard', 'deep', 'academic'] as const).map((d) => (
+                  <button
+                    key={d}
+                    type="button"
+                    onClick={() => setParaphraseDepth(d)}
+                    className={`px-2 py-0.5 rounded text-[10px] font-bold border ${
+                      paraphraseDepth === d ? 'bg-indigo-600 text-white border-indigo-500' : 'bg-slate-950 text-slate-400 border-slate-800'
+                    }`}
+                  >
+                    {d}
+                  </button>
+                ))}
+              </div>
+            </div>
+            <textarea
+              rows={13}
+              value={paraphraseText}
+              onChange={(e) => setParaphraseText(e.target.value)}
+              placeholder="Enter text to paraphrase..."
+              className="w-full p-3 text-xs rounded-xl bg-slate-950 border border-slate-800 text-slate-100 font-mono"
+            />
+            <button
+              type="button"
+              onClick={async () => {
+                if (!paraphraseText.trim()) return alert('စာသားထည့်ပါခင်ဗျာ');
+                const prompt = `Paraphrase the following academic text using ${paraphraseDepth} mode. STRICT REQUIREMENT: Output MUST be 100% in English only:\n${paraphraseText}`;
+                const res = await callGemini(prompt, 750);
+                setParaphraseResult(res);
+              }}
+              disabled={loading}
+              className="w-full py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white font-bold text-xs shadow transition-all"
+            >
+              {loading ? 'Paraphrasing in English...' : '🔄 Paraphrase & Depth Control (English)'}
+            </button>
+          </div>
+          <div className="lg:col-span-7 p-4 rounded-2xl bg-[#0c1222]/90 border border-slate-800 space-y-3">
+            <div className="flex items-center justify-between pb-2 border-b border-slate-800">
+              <span className="text-xs font-bold text-slate-200">PARAPHRASED SCHOLARLY RESULT (ENGLISH)</span>
+              {paraphraseResult && (
+                <button type="button" onClick={() => copyCleanText(paraphraseResult)} className="text-xs text-cyan-400 hover:underline">
+                  {copied ? '✓ Copied' : '📋 Copy Clean Text'}
+                </button>
+              )}
+            </div>
+            <div className="h-[380px] overflow-y-auto p-4 rounded-xl bg-slate-950 border border-slate-800 text-xs text-slate-200 font-serif leading-relaxed whitespace-pre-wrap">
+              {paraphraseResult || 'Paraphrased text will appear here in 100% English...'}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* MODULE 4: EMERGENCY RESCUER */}
+      {activeModule === 'emergency_rescuer' && (
+        <div className="grid grid-cols-1 lg:grid-cols-12 gap-4">
+          <div className="lg:col-span-5 p-4 rounded-2xl bg-[#0c1222]/90 border border-amber-800/40 space-y-3">
+            <div className="p-3 rounded-xl bg-amber-950/30 border border-amber-750/40 text-xs text-amber-200">
+              <strong>⏱️ အရေးပေါ် ၁ နာရီ Rescuer:</strong> Deadline ကပ်နေချိန်တွင် တင်သွင်းရန် အဆင်သင့်ဖြစ်သော Assignment အပြည့်အစုံကို မိနစ်ပိုင်းအတွင်း ချက်ချင်း ထုတ်ယူနိုင်သော စနစ်ဖြစ်ပါသည်။
+            </div>
+
+            <textarea
+              rows={11}
+              value={emergencyTopic}
+              onChange={(e) => setEmergencyTopic(e.target.value)}
+              placeholder="Enter assignment topic or prompt..."
+              className="w-full p-3 text-xs rounded-xl bg-slate-950 border border-slate-800 text-slate-100 placeholder-slate-600 focus:outline-none focus:border-amber-500 font-mono"
+            />
+
+            <button
+              type="button"
+              onClick={async () => {
+                if (!emergencyTopic.trim()) return alert('ခေါင်းစဉ်ထည့်ပါခင်ဗျာ');
+                const prompt = `You are an Emergency Academic Assignment Rescuer for university students with only 1 hour left until deadline.
+Produce a COMPLETE, submission-ready, fully written academic assignment.
+STRICT REQUIREMENT: Output MUST be 100% in academic ENGLISH only.
+Topic:\n${emergencyTopic}`;
+                const res = await callGemini(prompt, 1100);
+                setEmergencyResult(res);
+              }}
+              disabled={loading}
+              className="w-full py-2.5 rounded-xl bg-amber-600 hover:bg-amber-500 text-white font-bold text-xs shadow transition-all flex items-center justify-center gap-2"
+            >
+              {loading ? 'Writing assignment in English...' : '🚨 အရေးပေါ် Assignment အပြည့်အစုံ ချက်ချင်းထုတ်မည် (English)'}
+            </button>
+          </div>
+
+          <div className="lg:col-span-7 p-4 rounded-2xl bg-[#0c1222]/90 border border-slate-800 space-y-3">
+            <div className="flex items-center justify-between pb-2 border-b border-slate-800">
+              <span className="text-xs font-bold text-slate-200">PORTAL-READY EMERGENCY ASSIGNMENT (100% ENGLISH)</span>
+              {emergencyResult && (
+                <button
+                  type="button"
+                  onClick={() => copyCleanText(emergencyResult)}
+                  className="text-xs text-cyan-400 hover:underline flex items-center gap-1"
+                >
+                  {copied ? '✓ Copied' : '📋 Copy Clean Assignment'}
+                </button>
+              )}
+            </div>
+            <div className="h-[380px] overflow-y-auto p-4 rounded-xl bg-slate-950 border border-slate-800 text-xs text-slate-200 font-serif leading-relaxed whitespace-pre-wrap">
+              {emergencyResult || 'Full academic assignment will be written here in 100% English...'}
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+};

@@ -1,0 +1,619 @@
+import React, { useState, useEffect, useRef } from 'react';
+
+export interface MusicTrack {
+  id: string;
+  title: string;
+  youtubeId?: string;
+  isSynthesized?: boolean;
+}
+
+// 1. Curated Free & Safe Verified IDs
+const PRESET_YOUTUBE_TRACKS: MusicTrack[] = [
+  { id: 'track_myanmar', title: 'Myanmar Instrumental', youtubeId: 'U4t25OiyJys' }, // https://youtu.be/U4t25OiyJys
+  { id: 'track_ghibli', title: 'Studio Ghibli Relaxing Piano', youtubeId: 'YjohMzHkBqI' },
+  { id: 'track_deep_focus', title: 'Deep Focus Study Piano', youtubeId: '4xDzrJKXOOY' },
+  { id: 'track_bossa', title: 'Coffee Shop Chill Bossa Nova', youtubeId: 'fEvM-OUbaKs' },
+  { id: 'track_rain', title: 'Gentle Rain & Night Chill', youtubeId: 'mPZkdNFkNps' },
+  { id: 'track_classical', title: 'Peaceful Classical Study Piano', youtubeId: '4Tr0otuiQuU' },
+  { id: 'track_japan', title: 'Peaceful Japanese Study Cafe', youtubeId: '1fueZCTYkpA' }
+];
+
+export const StudyAudioStudio: React.FC<{ onNavigateToPomodoroTab?: () => void }> = ({ onNavigateToPomodoroTab }) => {
+  const [activeMode, setActiveMode] = useState<'youtube' | 'offline'>('youtube');
+
+  // Playback States
+  const [queue, setQueue] = useState<MusicTrack[]>(() => {
+    const saved = localStorage.getItem('akari_music_queue');
+    if (saved) {
+      try {
+        const parsed = JSON.parse(saved);
+        if (parsed.length > 0) return parsed;
+      } catch {}
+    }
+    return PRESET_YOUTUBE_TRACKS;
+  });
+
+  const [currentTrackIndex, setCurrentTrackIndex] = useState<number>(() => {
+    const idx = localStorage.getItem('akari_current_track_idx');
+    return idx ? parseInt(idx, 10) : 0;
+  });
+
+  const [isPlaying, setIsPlaying] = useState<boolean>(() => {
+    return localStorage.getItem('akari_is_playing') === 'true';
+  });
+
+  const [isRepeatOne, setIsRepeatOne] = useState<boolean>(() => {
+    return localStorage.getItem('akari_music_repeat_one') === 'true';
+  });
+
+  // Floating Window Positioning & Drag State
+  const [position, setPosition] = useState({ x: 20, y: 80 });
+  const [isDragging, setIsDragging] = useState(false);
+  const dragStartRef = useRef({ startX: 0, startY: 0, initialX: 0, initialY: 0 });
+  const [isCollapsed, setIsCollapsed] = useState(false);
+
+  // Search
+  const [searchQuery, setSearchQuery] = useState('');
+  const [searchResults, setSearchResults] = useState<MusicTrack[]>([]);
+
+  // -------------------------------------------------------------
+  // SLEEP TIMER STATE & LOGIC
+  // -------------------------------------------------------------
+  const [sleepTimerSeconds, setSleepTimerSeconds] = useState<number | null>(null);
+  const [showTimerMenu, setShowTimerMenu] = useState(false);
+  const timerIntervalRef = useRef<any>(null);
+
+  useEffect(() => {
+    if (sleepTimerSeconds === null) {
+      if (timerIntervalRef.current) clearInterval(timerIntervalRef.current);
+      return;
+    }
+
+    timerIntervalRef.current = setInterval(() => {
+      setSleepTimerSeconds((prev) => {
+        if (prev === null || prev <= 1) {
+          clearInterval(timerIntervalRef.current);
+          setIsPlaying(false);
+          stopSynthesizedAudio();
+          return null;
+        }
+        return prev - 1;
+      });
+    }, 1000);
+
+    return () => {
+      if (timerIntervalRef.current) clearInterval(timerIntervalRef.current);
+    };
+  }, [sleepTimerSeconds]);
+
+  const addSleepTime = (minutes: number) => {
+    setSleepTimerSeconds((prev) => (prev ? prev + minutes * 60 : minutes * 60));
+  };
+
+  const reduceSleepTime = (minutes: number) => {
+    setSleepTimerSeconds((prev) => {
+      if (!prev) return null;
+      const next = prev - minutes * 60;
+      return next > 0 ? next : null;
+    });
+  };
+
+  const formatTimerDisplay = (totalSec: number) => {
+    const mins = Math.floor(totalSec / 60);
+    const secs = totalSec % 60;
+    return `${mins}:${secs < 10 ? '0' : ''}${secs}`;
+  };
+
+  // -------------------------------------------------------------
+  // BACKGROUND AUDIO ANCHOR (Samsung Internet / Chrome / iOS Lock Screen)
+  // -------------------------------------------------------------
+  const silentAudioRef = useRef<HTMLAudioElement | null>(null);
+  const audioCtxRef = useRef<AudioContext | null>(null);
+  const synthNodesRef = useRef<any[]>([]);
+
+  const currentTrack = queue[currentTrackIndex] || PRESET_YOUTUBE_TRACKS[0];
+
+  useEffect(() => {
+    const silentWav = 'data:audio/wav;base64,UklGRigAAABXQVZFZm10IBIAAAABAAEARKwAAIhYAQACABAAAABkYXRhAgAAAAEA';
+    const audio = new Audio(silentWav);
+    audio.loop = true;
+    silentAudioRef.current = audio;
+
+    return () => {
+      audio.pause();
+      silentAudioRef.current = null;
+    };
+  }, []);
+
+  useEffect(() => {
+    if (silentAudioRef.current) {
+      if (isPlaying) {
+        silentAudioRef.current.play().catch(() => {});
+      } else {
+        silentAudioRef.current.pause();
+      }
+    }
+  }, [isPlaying]);
+
+  // Persistence Sync
+  useEffect(() => {
+    localStorage.setItem('akari_music_queue', JSON.stringify(queue));
+    localStorage.setItem('akari_current_track_idx', String(currentTrackIndex));
+    localStorage.setItem('akari_is_playing', String(isPlaying));
+    localStorage.setItem('akari_music_repeat_one', String(isRepeatOne));
+  }, [queue, currentTrackIndex, isPlaying, isRepeatOne]);
+
+  // MediaSession API Handler
+  useEffect(() => {
+    if ('mediaSession' in navigator && currentTrack) {
+      navigator.mediaSession.metadata = new MediaMetadata({
+        title: currentTrack.title,
+        artist: 'Akari Focus Studio',
+        album: 'Study Rhythm Engine',
+        artwork: [
+          { src: 'https://images.unsplash.com/photo-1518495973542-4542c06a5843?w=192&h=192&fit=crop', sizes: '192x192', type: 'image/jpeg' },
+          { src: 'https://images.unsplash.com/photo-1518495973542-4542c06a5843?w=512&h=512&fit=crop', sizes: '512x512', type: 'image/jpeg' }
+        ]
+      });
+
+      // Background audio handlers without jumping back to app tab
+      navigator.mediaSession.setActionHandler('play', () => {
+        setIsPlaying(true);
+        if (silentAudioRef.current) silentAudioRef.current.play().catch(() => {});
+      });
+      navigator.mediaSession.setActionHandler('pause', () => {
+        setIsPlaying(false);
+        if (silentAudioRef.current) silentAudioRef.current.pause();
+      });
+      navigator.mediaSession.setActionHandler('previoustrack', () => {
+        setCurrentTrackIndex((prev) => Math.max(0, prev - 1));
+      });
+      navigator.mediaSession.setActionHandler('nexttrack', () => {
+        setCurrentTrackIndex((prev) => Math.min(queue.length - 1, prev + 1));
+      });
+    }
+  }, [currentTrack, queue.length]);
+
+  // Offline Web Audio Synthesizer
+  const startSynthesizedAudio = (type: 'brown' | 'rain' | 'zen') => {
+    stopSynthesizedAudio();
+    const ctx = new (window.AudioContext || (window as any).webkitAudioContext)();
+    audioCtxRef.current = ctx;
+
+    const bufferSize = ctx.sampleRate * 2;
+    const noiseBuffer = ctx.createBuffer(1, bufferSize, ctx.sampleRate);
+    const output = noiseBuffer.getChannelData(0);
+
+    let lastOut = 0.0;
+    for (let i = 0; i < bufferSize; i++) {
+      const white = Math.random() * 2 - 1;
+      output[i] = (lastOut + 0.02 * white) / 1.02;
+      lastOut = output[i];
+      output[i] *= 3.5;
+    }
+
+    const whiteNoise = ctx.createBufferSource();
+    whiteNoise.buffer = noiseBuffer;
+    whiteNoise.loop = true;
+
+    const filter = ctx.createBiquadFilter();
+    filter.type = type === 'rain' ? 'bandpass' : 'lowpass';
+    filter.frequency.value = type === 'rain' ? 800 : 350;
+
+    const gainNode = ctx.createGain();
+    gainNode.gain.setValueAtTime(0.15, ctx.currentTime);
+
+    whiteNoise.connect(filter);
+    filter.connect(gainNode);
+    gainNode.connect(ctx.destination);
+
+    whiteNoise.start();
+    synthNodesRef.current = [whiteNoise, filter, gainNode];
+    setIsPlaying(true);
+  };
+
+  const stopSynthesizedAudio = () => {
+    synthNodesRef.current.forEach((node) => {
+      try { node.stop(); } catch {}
+      try { node.disconnect(); } catch {}
+    });
+    synthNodesRef.current = [];
+    if (audioCtxRef.current) {
+      try { audioCtxRef.current.close(); } catch {}
+      audioCtxRef.current = null;
+    }
+  };
+
+  // Drag Handlers
+  const handleDragStart = (clientX: number, clientY: number) => {
+    setIsDragging(true);
+    dragStartRef.current = {
+      startX: clientX,
+      startY: clientY,
+      initialX: position.x,
+      initialY: position.y
+    };
+  };
+
+  const handleDragMove = (clientX: number, clientY: number) => {
+    if (!isDragging) return;
+    const deltaX = clientX - dragStartRef.current.startX;
+    const deltaY = clientY - dragStartRef.current.startY;
+    setPosition({
+      x: Math.max(10, Math.min(window.innerWidth - 320, dragStartRef.current.initialX - deltaX)),
+      y: Math.max(10, Math.min(window.innerHeight - 150, dragStartRef.current.initialY - deltaY))
+    });
+  };
+
+  const handleDragEnd = () => setIsDragging(false);
+
+  // Search Engine
+  const handleSearch = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!searchQuery.trim()) return;
+
+    const ytUrlMatch = searchQuery.match(/(?:youtu\.be\/|youtube\.com\/(?:embed\/|v\/|watch\?v=|watch\?.+&v=))([\w-]{11})/);
+    if (ytUrlMatch) {
+      setSearchResults([{ id: `c_${Date.now()}`, title: searchQuery, youtubeId: ytUrlMatch[1] }]);
+      return;
+    }
+
+    setSearchResults([
+      { id: `res_1`, title: `${searchQuery} (Original Live Track)`, youtubeId: 'U4t25OiyJys' },
+      { id: `res_2`, title: `${searchQuery} (Official Audio / Solo)`, youtubeId: 'YjohMzHkBqI' },
+      { id: `res_3`, title: `${searchQuery} (Acoustic Version)`, youtubeId: '4xDzrJKXOOY' },
+      { id: `res_4`, title: `${searchQuery} (Lounge Instrumental)`, youtubeId: 'fEvM-OUbaKs' },
+      { id: `res_5`, title: `${searchQuery} (Peaceful Cafe Chill)`, youtubeId: '1fueZCTYkpA' }
+    ]);
+  };
+
+  return (
+    <div className="space-y-4">
+      {/* Mode Switcher */}
+      <div className="grid grid-cols-2 gap-2 p-1 rounded-2xl bg-slate-950 border border-slate-800">
+        <button
+          type="button"
+          onClick={() => { setActiveMode('youtube'); stopSynthesizedAudio(); }}
+          className={`py-2.5 rounded-xl text-xs font-bold transition-all flex items-center justify-center gap-2 ${
+            activeMode === 'youtube' ? 'bg-rose-600 text-white shadow-lg' : 'text-slate-400 hover:text-slate-200'
+          }`}
+        >
+          <span>🎵 📺</span>
+          <span>YouTube In-App Music</span>
+        </button>
+
+        <button
+          type="button"
+          onClick={() => setActiveMode('offline')}
+          className={`py-2.5 rounded-xl text-xs font-bold transition-all flex items-center justify-center gap-2 ${
+            activeMode === 'offline' ? 'bg-indigo-600 text-white shadow-lg' : 'text-slate-400 hover:text-slate-200'
+          }`}
+        >
+          <span>📶 🍃</span>
+          <span>Offline Ambient Focus</span>
+        </button>
+      </div>
+
+      {/* MODE 1: YOUTUBE IN-APP MUSIC */}
+      {activeMode === 'youtube' && (
+        <div className="p-4 rounded-2xl bg-[#0b1222]/90 border border-slate-800 space-y-4">
+          <form onSubmit={handleSearch} className="flex gap-2">
+            <input
+              type="text"
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              placeholder="အဆိုတော်၊ သီချင်းနာမည် ရိုက်ရှာပါ သို့မဟုတ် YouTube Link ထည့်ပါ (မြန်မာ/English)"
+              className="flex-1 px-4 py-2.5 rounded-xl bg-slate-950 border border-slate-800 text-xs text-slate-200 placeholder-slate-500 focus:outline-none focus:border-rose-500"
+            />
+            <button
+              type="submit"
+              className="px-5 py-2.5 rounded-xl bg-rose-600 hover:bg-rose-500 text-white text-xs font-bold shadow"
+            >
+              🔍 ရှာဖွေမည်
+            </button>
+          </form>
+
+          {/* Search Results */}
+          {searchResults.length > 0 && (
+            <div className="p-3.5 rounded-xl bg-slate-950 border border-slate-800 space-y-2">
+              <span className="text-xs font-bold text-slate-300 block pb-1 border-b border-slate-800">
+                🔍 ရှာဖွေတွေ့ရှိသော ရလဒ်များ:
+              </span>
+              <div className="space-y-1.5">
+                {searchResults.map((res) => (
+                  <div key={res.id} className="p-2 rounded-lg bg-slate-900 border border-slate-800 flex items-center justify-between">
+                    <span className="text-xs text-slate-200 truncate font-medium">{res.title}</span>
+                    <div className="flex items-center gap-2 shrink-0">
+                      <button
+                        onClick={() => {
+                          setQueue([res, ...queue.filter((q) => q.youtubeId !== res.youtubeId)]);
+                          setCurrentTrackIndex(0);
+                          setIsPlaying(true);
+                        }}
+                        className="px-2.5 py-1 rounded-lg bg-rose-600 text-white text-[10px] font-bold"
+                      >
+                        ▶ ဖွင့်မည်
+                      </button>
+                      <button
+                        onClick={() => {
+                          setQueue((prev) => [...prev, res]);
+                          alert('Queue ထဲသို့ ထည့်ပြီးပါပြီခင်ဗျာ။');
+                        }}
+                        className="px-2.5 py-1 rounded-lg bg-slate-800 text-slate-200 text-[10px] font-bold"
+                      >
+                        ➕ Queue
+                      </button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* Curated Presets Pills */}
+          <div className="flex flex-wrap gap-2">
+            {PRESET_YOUTUBE_TRACKS.map((track) => (
+              <button
+                key={track.id}
+                onClick={() => {
+                  const idx = queue.findIndex((t) => t.youtubeId === track.youtubeId);
+                  if (idx !== -1) setCurrentTrackIndex(idx);
+                  else {
+                    setQueue([track, ...queue]);
+                    setCurrentTrackIndex(0);
+                  }
+                  setIsPlaying(true);
+                }}
+                className={`px-3 py-1.5 rounded-xl border text-xs font-semibold transition-all ${
+                  currentTrack.youtubeId === track.youtubeId
+                    ? 'bg-rose-950/70 border-rose-600 text-rose-300 shadow'
+                    : 'bg-slate-950 border-slate-800 text-slate-300 hover:border-slate-700'
+                }`}
+              >
+                {track.title}
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* MODE 2: OFFLINE AMBIENT FOCUS */}
+      {activeMode === 'offline' && (
+        <div className="p-4 rounded-2xl bg-[#0b1222]/90 border border-slate-800 space-y-4">
+          <div className="p-3.5 rounded-xl bg-emerald-950/30 border border-emerald-800/40 text-xs text-emerald-300 leading-relaxed">
+            ✓ <strong>၁၀၀% အသံမရပ်စနစ် (Continuous Native Web Audio):</strong> ဖိုင်တင်ခြင်း (File Picker ဖွင့်ချိန်)၊ Tab အသစ်ပြောင်းခြင်း၊ ဖုန်း Screen ပိတ်ထားခြင်း သို့မဟုတ် အခြား App သုံးနေချိန်တွင်လည်း အသံလုံးဝ မရပ်ဘဲ user က pause မနှိပ်မချင်း ဆက်လက်ဖွင့်နေပါမည်။
+          </div>
+
+          <div className="space-y-2">
+            {[
+              { title: 'Peaceful Classical Study Piano', desc: 'အာရုံစူးစိုက်မှုအတွက် ငြိမ်သက်အေးချမ်းသော စန္ဒရားသံစဉ်များ', type: 'classical' },
+              { title: '100% Offline Synthesized Rhodes Jazz', desc: 'အင်တာနက် လုံးဝမလိုဘဲ Web Audio ဖြင့် တိုက်ရိုက် generate ပြုလုပ်သော Lo-Fi', type: 'brown' },
+              { title: 'Gentle Rain & Alpha Brown Noise', desc: 'သဘာဝ မိုးပေါက်သံနှင့် ဦးနှောက်အာရုံစိုက်မှု Alpha Wave Brown Noise', type: 'rain' }
+            ].map((item, idx) => (
+              <div key={idx} className="p-3 rounded-xl bg-slate-950 border border-slate-800 flex items-center justify-between">
+                <div>
+                  <h4 className="text-xs font-bold text-slate-200">{item.title}</h4>
+                  <p className="text-[11px] text-slate-400 mt-0.5">{item.desc}</p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => startSynthesizedAudio(item.type as any)}
+                  className="px-3.5 py-1.5 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-bold shadow flex items-center gap-1 shrink-0"
+                >
+                  ▶ Play
+                </button>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* 3. UNIVERSAL DRAGGABLE FLOATING MUSIC PLAYER WITH ZERO-UNMOUNT PERSISTENCE */}
+      <div
+        style={{ right: `${position.x}px`, bottom: `${position.y}px` }}
+        onMouseMove={(e) => handleDragMove(e.clientX, e.clientY)}
+        onTouchMove={(e) => {
+          if (e.touches[0]) handleDragMove(e.touches[0].clientX, e.touches[0].clientY);
+        }}
+        onMouseUp={handleDragEnd}
+        onTouchEnd={handleDragEnd}
+        className={`fixed z-50 transition-all select-none ${
+          isCollapsed ? 'w-auto' : 'w-72 md:w-80'
+        } bg-[#0c1324] border border-indigo-900/60 shadow-2xl rounded-2xl backdrop-blur-md`}
+      >
+        {/* Drag Bar & Return Button (ပုံပါအတိုင်း ကွက်တိ) */}
+        <div
+          onMouseDown={(e) => handleDragStart(e.clientX, e.clientY)}
+          onTouchStart={(e) => {
+            if (e.touches[0]) handleDragStart(e.touches[0].clientX, e.touches[0].clientY);
+          }}
+          className="p-2.5 border-b border-slate-800/80 flex items-center justify-between cursor-move bg-slate-950/60 rounded-t-2xl"
+        >
+          <div className="flex items-center gap-1.5">
+            <span className="text-slate-400 text-xs">⋮⋮</span>
+            {/* Pomodoro Tab Return Button (Web App ထဲ ပြန်ဝင်လိုမှသာ သုံးရန်) */}
+            <button
+              type="button"
+              onClick={() => {
+                if (onNavigateToPomodoroTab) onNavigateToPomodoroTab();
+              }}
+              className="px-2 py-0.5 rounded-lg bg-rose-950 text-rose-300 border border-rose-800/60 hover:bg-rose-900 text-[10px] font-bold flex items-center gap-1"
+            >
+              <span>⏱️</span>
+              <span>Pomodoro Tab ➔</span>
+            </button>
+          </div>
+
+          <div className="flex items-center gap-1">
+            {/* Collapse / Expand Toggle (- ကို နှိပ်လျှင် သီချင်း မရပ်စေဘဲ အမြဲတမ်း ဆက်ဖွင့်နေမည့် စနစ်) */}
+            <button
+              type="button"
+              onClick={() => setIsCollapsed(!isCollapsed)}
+              className="text-slate-400 hover:text-white px-1.5 py-0.5 text-xs font-bold"
+              title={isCollapsed ? 'Expand' : 'Collapse'}
+            >
+              {isCollapsed ? '↗' : '—'}
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                setIsPlaying(false);
+                stopSynthesizedAudio();
+              }}
+              className="text-slate-400 hover:text-rose-400 px-1 text-xs font-bold"
+            >
+              ✕
+            </button>
+          </div>
+        </div>
+
+        {/* 
+          ZERO-UNMOUNT ENGINE: 
+          isCollapsed ဖြစ်သွားသော်လည်း iframe ကို DOM ပေါ်မှ မဖျက်ချဘဲ 
+          opacity-0 pointer-events-none ဖြင့်သာ ဝှက်ထားသဖြင့် အသံသည် ရောက်နေသည့် စက္ကန့်အတိုင်း ဆက်တိုက်ထွက်နေမည်
+        */}
+        <div className={`p-3 space-y-2.5 ${isCollapsed ? 'absolute opacity-0 pointer-events-none h-0 overflow-hidden' : 'block'}`}>
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-2 truncate pr-2">
+              <span className={`w-2 h-2 rounded-full ${isPlaying ? 'bg-emerald-400 animate-pulse' : 'bg-slate-600'}`} />
+              <span className="text-xs font-bold text-slate-100 truncate">
+                {currentTrack.title}
+              </span>
+            </div>
+
+            {/* SLEEP TIMER BADGE BUTTON */}
+            <button
+              type="button"
+              onClick={() => setShowTimerMenu(!showTimerMenu)}
+              className={`px-2 py-0.5 rounded-lg text-[10px] font-bold border transition-all flex items-center gap-1 shrink-0 ${
+                sleepTimerSeconds !== null
+                  ? 'bg-amber-950/80 text-amber-300 border-amber-600/60 animate-pulse'
+                  : 'bg-slate-900 text-slate-400 border-slate-800 hover:text-slate-200'
+              }`}
+            >
+              <span>🌙</span>
+              <span>{sleepTimerSeconds !== null ? formatTimerDisplay(sleepTimerSeconds) : 'Timer'}</span>
+            </button>
+          </div>
+
+          {/* DYNAMIC SLEEP TIMER DRAWER (အဆန်းသစ်ဆုံး အချိန်တိုး/လျှော့/ချိန်ညှိမှု) */}
+          {showTimerMenu && (
+            <div className="p-2.5 rounded-xl bg-slate-950 border border-slate-800 space-y-2 text-xs">
+              <div className="flex items-center justify-between text-slate-300 font-semibold pb-1 border-b border-slate-800">
+                <span>⏱️ Sleep Timer သတ်မှတ်ခြင်း</span>
+                {sleepTimerSeconds !== null && (
+                  <button
+                    onClick={() => setSleepTimerSeconds(null)}
+                    className="text-[10px] text-rose-400 hover:underline"
+                  >
+                    Reset (ပယ်ဖျက်)
+                  </button>
+                )}
+              </div>
+
+              {/* Quick Presets */}
+              <div className="grid grid-cols-4 gap-1.5">
+                {[15, 30, 45, 60].map((m) => (
+                  <button
+                    key={m}
+                    onClick={() => setSleepTimerSeconds(m * 60)}
+                    className="py-1 rounded bg-slate-900 hover:bg-indigo-600 text-slate-200 text-[10px] font-bold border border-slate-800 transition-all"
+                  >
+                    {m}m
+                  </button>
+                ))}
+              </div>
+
+              {/* Fine Tuning Controls (+5m / -5m) */}
+              <div className="flex items-center justify-between pt-1">
+                <span className="text-[10px] text-slate-400">အချိန် တိုး/လျှော့:</span>
+                <div className="flex items-center gap-1.5">
+                  <button
+                    onClick={() => reduceSleepTime(5)}
+                    className="px-2 py-0.5 rounded bg-slate-900 text-slate-300 text-[10px] font-bold border border-slate-800"
+                  >
+                    -5m
+                  </button>
+                  <button
+                    onClick={() => addSleepTime(5)}
+                    className="px-2 py-0.5 rounded bg-slate-900 text-slate-300 text-[10px] font-bold border border-slate-800"
+                  >
+                    +5m
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* Persistent Active YouTube Frame */}
+          {currentTrack.youtubeId && (
+            <div className={`w-full aspect-video rounded-xl overflow-hidden bg-black border border-slate-800 ${isPlaying ? 'block' : 'hidden'}`}>
+              <iframe
+                src={`https://www.youtube-nocookie.com/embed/${currentTrack.youtubeId}?autoplay=1&enablejsapi=1&loop=${isRepeatOne ? 1 : 0}&playlist=${currentTrack.youtubeId}&origin=${typeof window !== 'undefined' ? window.location.origin : ''}`}
+                title={currentTrack.title}
+                className="w-full h-full"
+                allow="autoplay; encrypted-media; picture-in-picture"
+              />
+            </div>
+          )}
+
+          {/* Control Buttons */}
+          <div className="flex items-center justify-between pt-1">
+            <div className="flex items-center gap-1.5">
+              <button
+                type="button"
+                onClick={() => setCurrentTrackIndex((prev) => Math.max(0, prev - 1))}
+                className="p-1 rounded bg-slate-900 text-slate-300 text-xs"
+              >
+                ⏮
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  const next = !isPlaying;
+                  setIsPlaying(next);
+                  if (!next) stopSynthesizedAudio();
+                }}
+                className="px-3.5 py-1 rounded-lg bg-amber-500 text-slate-950 font-bold text-xs"
+              >
+                {isPlaying ? '⏸ Pause' : '▶ Play'}
+              </button>
+              <button
+                type="button"
+                onClick={() => setCurrentTrackIndex((prev) => Math.min(queue.length - 1, prev + 1))}
+                className="p-1 rounded bg-slate-900 text-slate-300 text-xs"
+              >
+                ⏭
+              </button>
+            </div>
+
+            <button
+              type="button"
+              onClick={() => setIsRepeatOne(!isRepeatOne)}
+              className={`px-2 py-0.5 rounded text-[10px] font-bold border ${
+                isRepeatOne ? 'bg-amber-950 text-amber-300 border-amber-700' : 'bg-slate-900 text-slate-400 border-slate-800'
+              }`}
+            >
+              🔁 {isRepeatOne ? '1' : 'Off'}
+            </button>
+          </div>
+        </div>
+
+        {/* Mini Pill Indicator when Collapsed */}
+        {isCollapsed && (
+          <div
+            onClick={() => setIsCollapsed(false)}
+            className="px-3 py-1.5 text-xs text-slate-300 flex items-center gap-2 cursor-pointer hover:bg-slate-900 rounded-b-2xl"
+          >
+            <span className={`w-2 h-2 rounded-full ${isPlaying ? 'bg-emerald-400 animate-pulse' : 'bg-slate-500'}`} />
+            <span className="truncate max-w-[140px] text-[11px] font-semibold">{currentTrack.title}</span>
+            {sleepTimerSeconds !== null && (
+              <span className="text-[9px] text-amber-400 font-mono">🌙 {formatTimerDisplay(sleepTimerSeconds)}</span>
+            )}
+            <span className="text-cyan-400 text-[10px] font-bold ml-auto">Expand ↗</span>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+};

@@ -1,0 +1,547 @@
+Role: Senior Frontend UX Architect, Academic Data Systems Engineer & Gemini API Optimization Specialist.
+
+Objective:
+Completely redesign and refactor `/src/components/SynthesisMatrixBuilder.tsx` and related services in the "Akari Scholar" Web App.
+Eliminate the raw, cluttered Markdown text dump and replace it with:
+1. (ဃ) Multi-Source Free Academic Ingestion (Crossref, Semantic Scholar, Europe PMC, OpenAlex APIs) with graceful Fallback / Manual Abstract Quick-Paste to prevent empty placeholder templates.
+2. Token-Frugal Gemini Integration (Using `gemini-3.5-flash-lite` with schema-enforced, compact JSON output, max 600 tokens).
+3. (က) Interactive HTML/Tailwind Data-Table & Responsive Card Toggle (Sticky Header, Zebra Striping, Horizontal Smooth-Scroll, Responsive Mobile View).
+4. (ခ) Two-Panel Tabbed Output:
+   - Sub-Tab 1: 📊 Synthesis Matrix (Formatted Interactive Comparison Table)
+   - Sub-Tab 2: 🧠 Thematic Synthesis (Structured Academic Paragraphs, Divergence & Gaps)
+5. (ဂ) Actionable One-Click Export & Clipboard Controls:
+   - "📋 Copy as Markdown"
+   - "📥 Export as CSV / Excel"
+   - "📝 Copy Thematic Essay Draft"
+
+---
+
+### PART 1: 100% FREE ACADEMIC RESOLVER SERVICE (`/src/services/academicResolver.ts`)
+
+Build an ultra-reliable client-side academic text resolver utilizing zero-key public scholarly APIs:
+
+```typescript
+export interface IngestedPaper {
+  id: string;
+  doiOrUrl: string;
+  title: string;
+  authors: string;
+  year: string;
+  abstract: string;
+  source: 'crossref' | 'semanticscholar' | 'europepmc' | 'openalex' | 'manual';
+  isFallbackNeeded: boolean;
+}
+
+// Cleans DOI strings
+export function extractDoi(input: string): string | null {
+  const match = input.match(/10\.\d{4,9}\/[-._;()/:A-Za-z0-9]+/i);
+  return match ? match[0] : null;
+}
+
+// Multi-Tier Public Scholarly API Fetcher (100% Free, No API Keys Required)
+export async function fetchPaperMetadata(doiOrUrl: string): Promise<IngestedPaper> {
+  const doi = extractDoi(doiOrUrl);
+
+  if (doi) {
+    // 1. Primary: Semantic Scholar Public API
+    try {
+      const res = await fetch(`[https://api.semanticscholar.org/graph/v1/paper/$](https://api.semanticscholar.org/graph/v1/paper/$){doi}?fields=title,authors,year,abstract`);
+      if (res.ok) {
+        const data = await res.json();
+        if (data.abstract && data.abstract.trim().length > 50) {
+          return {
+            id: `paper-${Date.now()}`,
+            doiOrUrl,
+            title: data.title || 'Untitled Academic Paper',
+            authors: (data.authors || []).map((a: any) => a.name).join(', ') || 'Unknown Author',
+            year: data.year ? data.year.toString() : 'n.d.',
+            abstract: data.abstract,
+            source: 'semanticscholar',
+            isFallbackNeeded: false
+          };
+        }
+      }
+    } catch (e) {
+      // Fall through to next provider
+    }
+
+    // 2. Secondary: OpenAlex API (Free Open-Access Scholarly Graph)
+    try {
+      const res = await fetch(`[https://api.openalex.org/works/https://doi.org/$](https://api.openalex.org/works/https://doi.org/$){doi}`);
+      if (res.ok) {
+        const data = await res.json();
+        // OpenAlex stores abstracts as inverted index; reconstruct if available
+        let reconstructedAbstract = '';
+        if (data.abstract_inverted_index) {
+          const index = data.abstract_inverted_index;
+          const wordsWithPositions: [string, number][] = [];
+          Object.keys(index).forEach(word => {
+            index[word].forEach((pos: number) => wordsWithPositions.push([word, pos]));
+          });
+          wordsWithPositions.sort((a, b) => a[1] - b[1]);
+          reconstructedAbstract = wordsWithPositions.map(w => w[0]).join(' ');
+        }
+
+        if (reconstructedAbstract.length > 50) {
+          return {
+            id: `paper-${Date.now()}`,
+            doiOrUrl,
+            title: data.title || 'Untitled Research Study',
+            authors: (data.authorships || []).map((a: any) => a.author?.display_name).slice(0, 3).join(', ') || 'Authors',
+            year: data.publication_year ? data.publication_year.toString() : 'n.d.',
+            abstract: reconstructedAbstract,
+            source: 'openalex',
+            isFallbackNeeded: false
+          };
+        }
+      }
+    } catch (e) {
+      // Fall through to Crossref
+    }
+
+    // 3. Tertiary: Crossref Works API
+    try {
+      const res = await fetch(`[https://api.crossref.org/works/$](https://api.crossref.org/works/$){encodeURIComponent(doi)}`);
+      if (res.ok) {
+        const data = await res.json();
+        const msg = data.message;
+        const cleanAbstract = (msg.abstract || '').replace(/<[^>]*>?/gm, '');
+        if (cleanAbstract.length > 50) {
+          return {
+            id: `paper-${Date.now()}`,
+            doiOrUrl,
+            title: Array.isArray(msg.title) ? msg.title[0] : (msg.title || doi),
+            authors: (msg.author || []).map((a: any) => `${a.family || ''} ${a.given || ''}`.trim()).join(', ') || 'Scholarly Authors',
+            year: msg.created?.['date-parts']?.[0]?.[0]?.toString() || 'n.d.',
+            abstract: cleanAbstract,
+            source: 'crossref',
+            isFallbackNeeded: false
+          };
+        }
+      }
+    } catch (e) {}
+  }
+
+  // Fallback: If free APIs return no abstract, require manual paste
+  return {
+    id: `paper-${Date.now()}`,
+    doiOrUrl,
+    title: doi ? `DOI: ${doi}` : doiOrUrl,
+    authors: 'Target Authors',
+    year: '2025/2026',
+    abstract: '',
+    source: 'manual',
+    isFallbackNeeded: true
+  };
+}
+PART 2: TOKEN-FRUGAL GEMINI SYNTHESIS ENGINE (/src/services/synthesisGeminiService.ts)Enforce strict JSON schema parsing and low token budget on gemini-3.5-flash-lite:   TypeScriptexport interface MatrixRowItem {
+  authorYear: string;
+  researchQuestion: string;
+  methodology: string;
+  sampleDataset: string;
+  keyFindings: string;
+  limitations: string;
+  identifiedGap: string;
+}
+
+export interface ThematicAnalysisItem {
+  commonThreads: string[];
+  conflictingFindings: string[];
+  synthesisSummary: string;
+}
+
+export interface CompleteSynthesisResult {
+  matrixRows: MatrixRowItem[];
+  thematicAnalysis: ThematicAnalysisItem;
+}
+
+export async function generateStructuredSynthesis(
+  papers: IngestedPaper[],
+  apiKey: string
+): Promise<CompleteSynthesisResult> {
+  const trimmedAbstracts = papers.map((p, idx) => 
+    `[Paper ${idx + 1}] Title: ${p.title} | Author/Year: ${p.authors} (${p.year})\nAbstract: ${p.abstract.substring(0, 1000)}`
+  ).join('\n\n');
+
+  const systemPrompt = `
+You are an expert Public Health & Quantitative Literature Reviewer.
+Analyze the provided study abstracts and synthesize them. Return ONLY valid JSON matching this exact structure:
+{
+  "matrixRows": [
+    {
+      "authorYear": "Author et al. (Year)",
+      "researchQuestion": "1 concise sentence",
+      "methodology": "Design type (e.g. Cross-sectional survey, RCT)",
+      "sampleDataset": "Sample size & population (e.g. N=500 healthcare workers)",
+      "keyFindings": "1-2 core statistical or thematic conclusions",
+      "limitations": "1 critical limitation",
+      "identifiedGap": "Specific unresolved gap"
+    }
+  ],
+  "thematicAnalysis": {
+    "commonThreads": ["Theme 1 description", "Theme 2 description"],
+    "conflictingFindings": ["Contradiction 1 or differing methodology effects"],
+    "synthesisSummary": "1 solid scholarly paragraph synthesizing how these studies integrate."
+  }
+}
+Rules:
+- Strictly factual based on provided text.
+- Be concise (save tokens).
+- Output valid raw JSON only. No markdown ticks, no commentary.
+`;
+
+  const url = `[https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash-lite:generateContent?key=$](https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash-lite:generateContent?key=$){apiKey}`;
+
+  const response = await fetch(url, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      contents: [{ role: 'user', parts: [{ text: `${systemPrompt}\n\nSTUDIES TO ANALYZE:\n${trimmedAbstracts}` }] }],
+      generationConfig: {
+        responseMimeType: 'application/json',
+        temperature: 0.2,
+        maxOutputTokens: 900
+      }
+    })
+  });
+
+  if (!response.ok) {
+    throw new Error(`Gemini API Error: ${response.statusText}`);
+  }
+
+  const data = await response.json();
+  const rawJson = data.candidates?.[0]?.content?.parts?.[0]?.text;
+  return JSON.parse(rawJson);
+}
+PART 3: UPGRADED INTERACTIVE WORKSPACE COMPONENT (/src/components/SynthesisMatrixBuilder.tsx)Build the clean, two-panel, interactive UI:TypeScriptimport React, { useState } from 'react';
+import { fetchPaperMetadata, IngestedPaper } from '../services/academicResolver';
+import { generateStructuredSynthesis, CompleteSynthesisResult } from '../services/synthesisGeminiService';
+
+export const SynthesisMatrixBuilder: React.FC = () => {
+  const [inputUrl, setInputUrl] = useState('');
+  const [ingestedPapers, setIngestedPapers] = useState<IngestedPaper[]>([]);
+  const [activeTab, setActiveTab] = useState<'matrix' | 'thematic'>('matrix');
+  const [viewMode, setViewMode] = useState<'table' | 'cards'>('table');
+  const [isLoading, setIsLoading] = useState(false);
+  const [synthesisResult, setSynthesisResult] = useState<CompleteSynthesisResult null |>(null);
+  const [fallbackModalPaper, setFallbackModalPaper] = useState<IngestedPaper null |>(null);
+
+  // Ingest DOI / Web link
+  const handleIngestPaper = async () => {
+    if (!inputUrl.trim()) return;
+    setIsLoading(true);
+    try {
+      const paper = await fetchPaperMetadata(inputUrl.trim());
+      if (paper.isFallbackNeeded) {
+        setFallbackModalPaper(paper);
+      } else {
+        setIngestedPapers(prev => [...prev, paper]);
+      }
+      setInputUrl('');
+    } catch {
+      alert('Error fetching paper details. Please paste the abstract manually.');
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  // Run Synthesis
+  const handleRunSynthesis = async () => {
+    const key = localStorage.getItem('akari_gemini_api_key_primary') || '';
+    if (!key) {
+      alert('Gemini API Key Vault တွင် Key ဦးစွာ ထည့်သွင်းပေးပါခင်ဗျာ။');
+      return;
+    }
+    if (ingestedPapers.length < 2) {
+      alert('သုတေသန နှိုင်းယှဉ်ဇယား ထုတ်ရန် အနည်းဆုံး စာတမ်း (၂) စောင် လိုအပ်ပါသည်ခင်ဗျာ။');
+      return;
+    }
+    setIsLoading(true);
+    try {
+      const result = await generateStructuredSynthesis(ingestedPapers, key);
+      setSynthesisResult(result);
+    } catch (e: any) {
+      alert(e.message || 'Synthesis ထုတ်ယူရာတွင် အမှားအယွင်းရှိပါသည်');
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  // Export to CSV
+  const handleExportCsv = () => {
+    if (!synthesisResult) return;
+    const headers = ['Author & Year', 'Research Question', 'Methodology', 'Sample / Dataset', 'Key Findings', 'Limitations', 'Identified Gap'];
+    const rows = synthesisResult.matrixRows.map(r => [
+      `"${r.authorYear}"`, `"${r.researchQuestion}"`, `"${r.methodology}"`, `"${r.sampleDataset}"`, `"${r.keyFindings}"`, `"${r.limitations}"`, `"${r.identifiedGap}"`
+    ]);
+    const csvContent = 'data:text/csv;charset=utf-8,' + [headers.join(','), ...rows.map(e => e.join(','))].join('\n');
+    const encodedUri = encodeURI(csvContent);
+    const link = document.createElement('a');
+    link.setAttribute('href', encodedUri);
+    link.setAttribute('download', `Synthesis_Matrix_${Date.now()}.csv`);
+    link.click();
+  };
+
+  return (
+    <div className="space-y-6">
+      {/* Step 1: Input Ingestion Bar */}
+      <div className="p-4 rounded-2xl bg-[#0c1222]/90 border border-slate-800 space-y-3">
+        <div className="flex items-center justify-between flex-wrap gap-2">
+          <span className="text-xs font-bold text-slate-200 flex items-center gap-2">
+            <span>🔗</span> DOI / URL ထည့်သွင်းပါ (Semantic Scholar, Crossref, OpenAlex Auto-Pull)
+          </span>
+          <span className="text-[11px] text-slate-400">
+            {ingestedPapers.length} Papers Added (အနည်းဆုံး ၂ စောင် ထည့်ပါ)
+          </span>
+        </div>
+
+        <div className="flex items-center gap-2">
+          <input
+            type="text"
+            value={inputUrl}
+            onChange={(e) => setInputUrl(e.target.value)}
+            placeholder="e.g. 10.1016/j.lana.2024.100746 သို့မဟုတ် PubMed / PMC / CDC link"
+            className="flex-1 px-3.5 py-2 text-xs rounded-xl bg-slate-900 border border-slate-700 text-slate-100 placeholder-slate-500 focus:outline-none focus:border-indigo-500"
+          />
+          <button
+            onClick={handleIngestPaper}
+            disabled={isLoading || !inputUrl.trim()}
+            className="px-4 py-2 text-xs font-bold rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white disabled:opacity-50 transition-all shrink-0"
+          >
+            {isLoading ? 'ဆွဲယူနေသည်...' : '+ စာတမ်း ထည့်မည်'}
+          </button>
+        </div>
+
+        {/* Paper Chips List */}
+        {ingestedPapers.length > 0 && (
+          <div className="flex flex-wrap gap-2 pt-2">
+            {ingestedPapers.map((p, idx) => (
+              <div key={p.id} className="flex items-center gap-2 px-3 py-1 rounded-xl bg-slate-800/90 border border-slate-700 text-xs text-slate-200">
+                <span className="font-bold text-indigo-400">P{idx + 1}:</span>
+                <span className="truncate max-w-[200px]">{p.title}</span>
+                <button
+                  onClick={() => setIngestedPapers(ingestedPapers.filter(x => x.id !== p.id))}
+                  className="text-slate-500 hover:text-rose-400 text-xs ml-1"
+                >
+                  ✕
+                </button>
+              </div>
+            ))}
+          </div>
+        )}
+
+        {/* Run Matrix Button */}
+        {ingestedPapers.length >= 2 && (
+          <div className="pt-2 flex justify-end">
+            <button
+              onClick={handleRunSynthesis}
+              disabled={isLoading}
+              className="px-5 py-2 rounded-xl bg-gradient-to-r from-indigo-600 to-cyan-600 hover:from-indigo-500 hover:to-cyan-500 text-white font-bold text-xs shadow-lg shadow-indigo-900/30 flex items-center gap-2"
+            >
+              <span>⚡</span> {isLoading ? 'Matrix တွက်ချက်နေသည်...' : 'Synthesis Matrix ထုတ်မည်'}
+            </button>
+          </div>
+        )}
+      </div>
+
+      {/* Manual Abstract Modal Fallback (When API cannot fetch abstract) */}
+      {fallbackModalPaper && (
+        <div className="fixed inset-0 z-50 bg-black/70 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="w-full max-w-lg p-5 rounded-2xl bg-slate-900 border border-slate-800 space-y-3">
+            <h4 className="text-sm font-bold text-amber-300 flex items-center gap-2">
+              <span>⚠️</span> Abstract စာသား ထည့်သွင်းပေးပါ
+            </h4>
+            <p className="text-xs text-slate-400">
+              ထည့်သွင်းလိုက်သော DOI/URL မှ Abstract ကို တိုက်ရိုက် မဆွဲယူနိုင်ပါသဖြင့် အဆိုပါ စာတမ်း၏ Abstract စာသားကို အောက်တွင် Paste ချပေးပါခင်ဗျာ။
+            </p>
+            <textarea
+              rows={5}
+              placeholder="Paste Abstract text here..."
+              className="w-full p-3 text-xs rounded-xl bg-slate-950 border border-slate-800 text-slate-100 focus:outline-none focus:border-amber-500"
+              onChange={(e) => {
+                fallbackModalPaper.abstract = e.target.value;
+              }}
+            />
+            <div className="flex justify-end gap-2">
+              <button
+                onClick={() => setFallbackModalPaper(null)}
+                className="px-3 py-1.5 text-xs text-slate-400 hover:text-slate-200"
+              >
+                မလုပ်တော့ပါ
+              </button>
+              <button
+                onClick={() => {
+                  if (!fallbackModalPaper.abstract.trim()) return;
+                  setIngestedPapers(prev => [...prev, fallbackModalPaper]);
+                  setFallbackModalPaper(null);
+                }}
+                className="px-4 py-1.5 text-xs font-bold rounded-xl bg-amber-600 hover:bg-amber-500 text-white"
+              >
+                အတည်ပြုမည်
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Step 2: Interactive Two-Panel Output */}
+      {synthesisResult && (
+        <div className="p-5 rounded-2xl bg-[#0c1222]/90 border border-slate-800 space-y-4">
+          {/* Top Panel Bar */}
+          <div className="flex items-center justify-between flex-wrap gap-3 pb-3 border-b border-slate-800">
+            {/* Sub-Tabs Switcher */}
+            <div className="flex items-center gap-1.5 p-1 rounded-xl bg-slate-900 border border-slate-800">
+              <button
+                onClick={() => setActiveTab('matrix')}
+                className={`px-3.5 py-1.5 text-xs font-bold rounded-lg transition-all ${
+                  activeTab === 'matrix' ? 'bg-indigo-600 text-white shadow-sm' : 'text-slate-400 hover:text-slate-200'
+                }`}
+              >
+                📊 Synthesis Matrix (ဇယား)
+              </button>
+              <button
+                onClick={() => setActiveTab('thematic')}
+                className={`px-3.5 py-1.5 text-xs font-bold rounded-lg transition-all ${
+                  activeTab === 'thematic' ? 'bg-indigo-600 text-white shadow-sm' : 'text-slate-400 hover:text-slate-200'
+                }`}
+              >
+                🧠 Thematic Synthesis (သုံးသပ်ချက်)
+              </button>
+            </div>
+
+            {/* Quick Actions (Export / Copy) */}
+            <div className="flex items-center gap-2">
+              {activeTab === 'matrix' && (
+                <button
+                  onClick={() => setViewMode(viewMode === 'table' ? 'cards' : 'table')}
+                  className="px-3 py-1.5 text-xs rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700"
+                >
+                  {viewMode === 'table' ? '📱 Card View' : '🖥️ Table View'}
+                </button>
+              )}
+              <button
+                onClick={handleExportCsv}
+                className="px-3 py-1.5 text-xs font-semibold rounded-xl bg-slate-800 hover:bg-slate-700 text-emerald-300 border border-slate-700 flex items-center gap-1.5"
+              >
+                <span>📊</span> Export CSV
+              </button>
+              <button
+                onClick={() => {
+                  navigator.clipboard.writeText(JSON.stringify(synthesisResult, null, 2));
+                  alert('Copied to clipboard!');
+                }}
+                className="px-3 py-1.5 text-xs font-semibold rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700"
+              >
+                📋 Copy All
+              </button>
+            </div>
+          </div>
+
+          {/* Sub-Tab 1: Synthesis Matrix View */}
+          {activeTab === 'matrix' && (
+            <div>
+              {viewMode === 'table' ? (
+                <div className="overflow-x-auto rounded-xl border border-slate-800 shadow-inner">
+                  <table className="w-full text-left text-xs border-collapse">
+                    <thead>
+                      <tr className="bg-slate-900/90 text-slate-300 font-bold border-b border-slate-800">
+                        <th className="p-3 w-40 sticky left-0 bg-slate-900 z-10">Author & Year</th>
+                        <th className="p-3 min-w-[180px]">Research Question</th>
+                        <th className="p-3 min-w-[160px]">Methodology</th>
+                        <th className="p-3 min-w-[160px]">Sample / Dataset</th>
+                        <th className="p-3 min-w-[200px]">Key Findings</th>
+                        <th className="p-3 min-w-[160px]">Limitations</th>
+                        <th className="p-3 min-w-[160px]">Identified Gap</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-800/60">
+                      {synthesisResult.matrixRows.map((row, idx) => (
+                        <tr key={idx} className={idx % 2 === 0 ? 'bg-slate-950/40 hover:bg-slate-800/40' : 'bg-slate-900/20 hover:bg-slate-800/40'}>
+                          <td className="p-3 font-semibold text-indigo-300 sticky left-0 bg-slate-950 z-10 border-r border-slate-800">
+                            {row.authorYear}
+                          </td>
+                          <td className="p-3 text-slate-300 leading-relaxed">{row.researchQuestion}</td>
+                          <td className="p-3 text-cyan-300 leading-relaxed">{row.methodology}</td>
+                          <td className="p-3 text-slate-300 leading-relaxed">{row.sampleDataset}</td>
+                          <td className="p-3 text-emerald-300 leading-relaxed">{row.keyFindings}</td>
+                          <td className="p-3 text-amber-300/90 leading-relaxed">{row.limitations}</td>
+                          <td className="p-3 text-purple-300 leading-relaxed">{row.identifiedGap}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              ) : (
+                /* Card View for Mobile */
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  {synthesisResult.matrixRows.map((row, idx) => (
+                    <div key={idx} className="p-4 rounded-xl bg-slate-900 border border-slate-800 space-y-2 text-xs">
+                      <h4 className="font-bold text-sm text-indigo-300 pb-1 border-b border-slate-800">{row.authorYear}</h4>
+                      <p><strong className="text-slate-400">Question:</strong> <span className="text-slate-200">{row.researchQuestion}</span></p>
+                      <p><strong className="text-slate-400">Methodology:</strong> <span className="text-cyan-300">{row.methodology}</span></p>
+                      <p><strong className="text-slate-400">Sample:</strong> <span className="text-slate-200">{row.sampleDataset}</span></p>
+                      <p><strong className="text-slate-400">Findings:</strong> <span className="text-emerald-300">{row.keyFindings}</span></p>
+                      <p><strong className="text-slate-400">Limitations:</strong> <span className="text-amber-300">{row.limitations}</span></p>
+                      <p><strong className="text-slate-400">Gap:</strong> <span className="text-purple-300">{row.identifiedGap}</span></p>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* Sub-Tab 2: Thematic Synthesis View */}
+          {activeTab === 'thematic' && (
+            <div className="space-y-4">
+              {/* Common Threads */}
+              <div className="p-4 rounded-xl bg-slate-900/60 border border-slate-800 space-y-2">
+                <h4 className="text-xs font-bold text-indigo-300 flex items-center gap-2">
+                  <span>🧵</span> Common Thematic Threads (တူညီသော တွေ့ရှိချက်များနှင့် အဓိက အကြောင်းအရာများ)
+                </h4>
+                <ul className="list-disc list-inside space-y-1.5 text-xs text-slate-300 leading-relaxed">
+                  {synthesisResult.thematicAnalysis.commonThreads.map((thread, i) => (
+                    <li key={i}>{thread}</li>
+                  ))}
+                </ul>
+              </div>
+
+              {/* Conflicting Findings */}
+              <div className="p-4 rounded-xl bg-slate-900/60 border border-slate-800 space-y-2">
+                <h4 className="text-xs font-bold text-amber-300 flex items-center gap-2">
+                  <span>⚖️</span> Divergence & Conflicting Findings (ကွဲလွဲချက်များနှင့် ကန့်သတ်ချက်များ)
+                </h4>
+                <ul className="list-disc list-inside space-y-1.5 text-xs text-slate-300 leading-relaxed">
+                  {synthesisResult.thematicAnalysis.conflictingFindings.map((conflict, i) => (
+                    <li key={i}>{conflict}</li>
+                  ))}
+                </ul>
+              </div>
+
+              {/* Comprehensive Synthesis Essay Paragraph */}
+              <div className="p-4 rounded-xl bg-slate-900 border border-indigo-950/60 space-y-2">
+                <div className="flex items-center justify-between">
+                  <h4 className="text-xs font-bold text-cyan-300 flex items-center gap-2">
+                    <span>📝</span> Scholarly Synthesis Paragraph (Assignment အတွက် စာပိုဒ်ကြမ်း)
+                  </h4>
+                  <button
+                    onClick={() => {
+                      navigator.clipboard.writeText(synthesisResult.thematicAnalysis.synthesisSummary);
+                      alert('Synthesis paragraph copied!');
+                    }}
+                    className="text-[11px] text-cyan-400 hover:text-cyan-300 font-semibold"
+                  >
+                    ကော်ပီယူမည်
+                  </button>
+                </div>
+                <p className="text-xs text-slate-300 leading-relaxed italic bg-slate-950/60 p-3 rounded-lg border border-slate-800">
+                  "{synthesisResult.thematicAnalysis.synthesisSummary}"
+                </p>
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+};
+PART 4: ZERO-REGRESSION VERIFICATIONFree API Resolution:Provide DOI 10.1016/j.lana.2024.100746. Confirm Semantic Scholar or OpenAlex automatically pulls title, authors, year, and real abstract without requiring a Gemini call.   If a paywalled DOI returns no abstract, confirm the Modal prompts for user input rather than dumping fake [e.g., ...] placeholders.   Frugal AI Extraction:Run synthesis with gemini-3.5-flash-lite. Confirm the API call uses structured JSON (responseMimeType: application/json) and completes strictly under 900 tokens.   Clean UI Rendering:Confirm the output is rendered in a clean HTML Table with Zebra striping and sticky Author headers, completely eliminating raw Markdown pipes |.   Verify switching between "📊 Synthesis Matrix" and "🧠 Thematic Synthesis" cleanly toggles between the structured table and the academic analysis essay.Test "Export CSV" to confirm valid CSV generation without syntax errors.Please apply these updates to /src/services/academicResolver.ts, /src/services/synthesisGeminiService.ts, and /src/components/SynthesisMatrixBuilder.tsx now.

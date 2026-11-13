@@ -1,0 +1,587 @@
+Role: Senior Frontend React Architect & Academic Discussion Engineering Specialist.
+
+Objective:
+Consolidate and merge "Classmates Peer Comments (၃ ယောက်)" and "ကိုယ့် post မေးခွန်းများ ပြန်ဖြေစနစ်" into a unified, high-efficiency studio: `/src/components/UnifiedDiscussionStudio.tsx`.
+Create its background cascade service in `/src/services/discussionGeminiService.ts` utilizing the user's verified Gemini Flash / Flash-Lite model cascade.
+Clean up the top navigation bar in `/src/components/AssignmentWorkspace.tsx` (or your main navigation container) by replacing the two disjoint tabs with a single unified tab.
+
+---
+
+### PART 1: UNIFIED INFERENCE SERVICE (`/src/services/discussionGeminiService.ts`)
+
+Create or update `/src/services/discussionGeminiService.ts`:
+
+```typescript
+export interface PeerCommentVariant {
+  style: string; // e.g. "Analytical & Scholarly", "Supportive & Empirical", "Critical Inquirer"
+  wordCount: number;
+  responseBurmeseGuide: string;
+  responseEnglishText: string;
+}
+
+export interface PeerCommentsResult {
+  unitTopic: string;
+  variants: PeerCommentVariant[];
+}
+
+export interface FollowUpReplyResult {
+  respondentType: 'Instructor' | 'Classmate';
+  thesisAlignmentTip: string;
+  readyToSubmitReply: string;
+  counterQuestion: string;
+}
+
+// User-verified Flash/Flash-Lite models in exact cascade order
+const DISCUSSION_MODELS = [
+  'gemini-3.5-flash-lite',
+  'gemini-3.1-flash-lite',
+  'gemini-flash-lite-latest',
+  'gemini-3-flash-preview',
+  'gemini-3.6-flash',
+  'gemini-3.8-flash',
+  'gemini-flash-latest'
+];
+
+function cleanJson(raw: string): string {
+  let cleaned = raw.replace(/```json/gi, '').replace(/```/g, '').trim();
+  const firstBrace = cleaned.indexOf('{');
+  if (firstBrace !== -1) {
+    cleaned = cleaned.substring(firstBrace);
+  }
+  const lastBrace = cleaned.lastIndexOf('}');
+  if (lastBrace !== -1) {
+    cleaned = cleaned.substring(0, lastBrace + 1);
+  }
+  return cleaned;
+}
+
+// 1. Generate 3 Peer Comments for Classmates
+export async function generatePeerComments(
+  unitTopic: string,
+  classmatePost: string,
+  apiKey: string
+): Promise<PeerCommentsResult> {
+  const cleanKey = apiKey.trim();
+  const systemPrompt = `
+You are an Elite Academic Peer Reviewer for University of the People.
+Generate THREE distinct, high-scoring peer response comments (each strictly 110-150 words) for a classmate's discussion post.
+Adhere strictly to UoPeople 3-part discussion rubric:
+(1) Specific, non-generic commendation (no robotic "Overall, great post"),
+(2) Conceptual extension with empirical/theoretical depth,
+(3) Thought-provoking open-ended question to sustain discourse.
+
+Return ONLY valid JSON matching this schema:
+{
+  "unitTopic": "Clean string of unit topic",
+  "variants": [
+    {
+      "style": "Analytical & Methodological",
+      "wordCount": 125,
+      "responseBurmeseGuide": "ဤရွေးချယ်မှု၏ အဓိကထောက်ပြချက်ကို မြန်မာလို အကျဉ်းချုပ် ၁ ကြောင်း",
+      "responseEnglishText": "Full academic peer response paragraph ready to post..."
+    },
+    {
+      "style": "Empirical & Evidence-Driven",
+      "wordCount": 130,
+      "responseBurmeseGuide": "ဒုတိယရွေးချယ်မှု၏ အနှစ်ချုပ် ၁ ကြောင်း",
+      "responseEnglishText": "Full academic peer response paragraph ready to post..."
+    },
+    {
+      "style": "Critical Perspective & Nuance",
+      "wordCount": 120,
+      "responseBurmeseGuide": "တတိယရွေးချယ်မှု၏ အနှစ်ချုပ် ၁ ကြောင်း",
+      "responseEnglishText": "Full academic peer response paragraph ready to post..."
+    }
+  ]
+}
+Rules: Output raw JSON only. Max 900 tokens.
+`;
+
+  const userContent = `UNIT TOPIC: ${unitTopic || 'General Coursework Topic'}\n\nCLASSMATE'S POST:\n${classmatePost.substring(0, 3500)}`;
+
+  for (const model of DISCUSSION_MODELS) {
+    try {
+      const url = `[https://generativelanguage.googleapis.com/v1beta/models/$](https://generativelanguage.googleapis.com/v1beta/models/$){model}:generateContent?key=${cleanKey}`;
+      const res = await fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          contents: [{ role: 'user', parts: [{ text: `${systemPrompt}\n\n${userContent}` }] }],
+          generationConfig: { responseMimeType: 'application/json', temperature: 0.2, maxOutputTokens: 1100 }
+        })
+      });
+      if (!res.ok) continue;
+      const data = await res.json();
+      const rawText = data.candidates?.[0]?.content?.parts?.[0]?.text;
+      if (!rawText) continue;
+      return JSON.parse(cleanJson(rawText));
+    } catch {}
+  }
+  throw new Error('Peer Comments ထုတ်ယူ၍ မရပါ။ API Key သို့မဟုတ် အင်တာနက်ကို စစ်ဆေးပေးပါခင်ဗျာ။');
+}
+
+// 2. Generate Follow-up Reply to Question under Student's Own Post
+export async function generateFollowUpReply(
+  originalPost: string,
+  inquirerType: 'Instructor' | 'Classmate',
+  theirQuestion: string,
+  apiKey: string
+): Promise<FollowUpReplyResult> {
+  const cleanKey = apiKey.trim();
+  const systemPrompt = `
+You are a Confident University Scholar responding to a follow-up inquiry on your discussion post.
+Respondent target: ${inquirerType === 'Instructor' ? 'Professor/Instructor (Strict academic rigor, respect, citing foundational course concepts)' : 'Peer Classmate (Collegial, collaborative, insightful)'}.
+Write an authentic, highly articulate academic reply (120-160 words) that defends your thesis, clarifies nuances, and offers a smart follow-up question.
+
+Return ONLY valid JSON matching this schema:
+{
+  "respondentType": "${inquirerType}",
+  "thesisAlignmentTip": "1 sentence on how this reply safeguards your thesis credibility.",
+  "readyToSubmitReply": "Full formal reply paragraph addressing their inquiry with academic poise.",
+  "counterQuestion": "1 smart closing question to keep discourse academic."
+}
+Rules: Output raw JSON only. Max 600 tokens.
+`;
+
+  const userContent = `MY ORIGINAL POST EXCERPT:\n${originalPost.substring(0, 2500)}\n\nTHEIR INQUIRY (${inquirerType}):\n${theirQuestion.substring(0, 1500)}`;
+
+  for (const model of DISCUSSION_MODELS) {
+    try {
+      const url = `[https://generativelanguage.googleapis.com/v1beta/models/$](https://generativelanguage.googleapis.com/v1beta/models/$){model}:generateContent?key=${cleanKey}`;
+      const res = await fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          contents: [{ role: 'user', parts: [{ text: `${systemPrompt}\n\n${userContent}` }] }],
+          generationConfig: { responseMimeType: 'application/json', temperature: 0.15, maxOutputTokens: 850 }
+        })
+      });
+      if (!res.ok) continue;
+      const data = await res.json();
+      const rawText = data.candidates?.[0]?.content?.parts?.[0]?.text;
+      if (!rawText) continue;
+      return JSON.parse(cleanJson(rawText));
+    } catch {}
+  }
+  throw new Error('Follow-up Reply ထုတ်ယူ၍ မရပါ။ API Key သို့မဟုတ် အင်တာနက်ကို စစ်ဆေးပေးပါခင်ဗျာ။');
+}
+PART 2: UNIFIED COMPONENT (/src/components/UnifiedDiscussionStudio.tsx)
+Create /src/components/UnifiedDiscussionStudio.tsx:
+
+TypeScript
+import React, { useState } from 'react';
+import {
+  generatePeerComments,
+  generateFollowUpReply,
+  PeerCommentsResult,
+  FollowUpReplyResult
+} from '../services/discussionGeminiService';
+
+export const UnifiedDiscussionStudio: React.FC = () => {
+  const [activeSubMode, setActiveSubMode] = useState<'peer' | 'followup'>('peer');
+
+  // Peer Mode States
+  const [unitTopic, setUnitTopic] = useState('');
+  const [classmatePost, setClassmatePost] = useState('');
+  const [peerLoading, setPeerLoading] = useState(false);
+  const [peerResult, setPeerResult] = useState<PeerCommentsResult | null>(null);
+
+  // Follow-up Mode States
+  const [myOriginalPost, setMyOriginalPost] = useState('');
+  const [inquirerType, setInquirerType] = useState<'Instructor' | 'Classmate'>('Instructor');
+  const [theirQuestion, setTheirQuestion] = useState('');
+  const [followupLoading, setFollowupLoading] = useState(false);
+  const [followupResult, setFollowupResult] = useState<FollowUpReplyResult | null>(null);
+
+  const getApiKey = () => localStorage.getItem('akari_gemini_api_key_primary') || '';
+
+  // Handle Peer Comments Generation
+  const handleGeneratePeer = async () => {
+    if (!classmatePost.trim()) {
+      alert('Classmate ၏ Discussion Post စာသားကို အရင်ဆုံး ထည့်သွင်းပေးပါခင်ဗျာ။');
+      return;
+    }
+    const key = getApiKey();
+    if (!key) {
+      alert('Gemini API Key Vault တွင် Key ဦးစွာ ထည့်သွင်းပေးပါခင်ဗျာ။');
+      return;
+    }
+
+    setPeerLoading(true);
+    try {
+      const data = await generatePeerComments(unitTopic, classmatePost, key);
+      setPeerResult(data);
+    } catch (err: any) {
+      alert(err.message || 'Error generating peer comments');
+    } finally {
+      setPeerLoading(false);
+    }
+  };
+
+  // Handle Follow-up Reply Generation
+  const handleGenerateFollowup = async () => {
+    if (!theirQuestion.trim()) {
+      alert('သူတို့ မေးထားသော မေးခွန်း သို့မဟုတ် ထောက်ပြချက်ကို ထည့်သွင်းပေးပါခင်ဗျာ။');
+      return;
+    }
+    const key = getApiKey();
+    if (!key) {
+      alert('Gemini API Key Vault တွင် Key ဦးစွာ ထည့်သွင်းပေးပါခင်ဗျာ။');
+      return;
+    }
+
+    setFollowupLoading(true);
+    try {
+      const data = await generateFollowUpReply(myOriginalPost, inquirerType, theirQuestion, key);
+      setFollowupResult(data);
+    } catch (err: any) {
+      alert(err.message || 'Error generating follow-up reply');
+    } finally {
+      setFollowupLoading(false);
+    }
+  };
+
+  return (
+    <div className="space-y-4">
+      {/* Top Banner & Mode Switcher */}
+      <div className="p-3.5 rounded-2xl bg-[#0c1222]/90 border border-slate-800 flex items-center justify-between flex-wrap gap-3">
+        <div className="flex items-center gap-2.5">
+          <div className="p-2 rounded-xl bg-indigo-950/80 text-indigo-400 border border-indigo-800/40">
+            <span>💬</span>
+          </div>
+          <div>
+            <h3 className="text-xs font-bold text-slate-100">
+              UoPeople Discussion Forum Studio (Peer & Follow-up Replies)
+            </h3>
+            <p className="text-[11px] text-slate-400">
+              Discussion Rubric အမှတ်ပြည့် (100+ Words & Anti-AI) Peer Response နှင့် မေးခွန်းပြန်ဖြေ Assistant
+            </p>
+          </div>
+        </div>
+
+        {/* Sub-Mode Switcher Pills */}
+        <div className="flex items-center gap-1.5 p-1 rounded-xl bg-slate-950 border border-slate-800">
+          <button
+            type="button"
+            onClick={() => setActiveSubMode('peer')}
+            className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all ${
+              activeSubMode === 'peer'
+                ? 'bg-indigo-600 text-white shadow'
+                : 'text-slate-400 hover:text-slate-200'
+            }`}
+          >
+            👥 Classmates (၃) ယောက်အတွက် Comments
+          </button>
+          <button
+            type="button"
+            onClick={() => setActiveSubMode('followup')}
+            className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all ${
+              activeSubMode === 'followup'
+                ? 'bg-emerald-600 text-white shadow'
+                : 'text-slate-400 hover:text-slate-200'
+            }`}
+          >
+            ✉️ ကိုယ့် Post မေးခွန်းများ ပြန်ဖြေစနစ်
+          </button>
+        </div>
+      </div>
+
+      {/* MODE 1: PEER COMMENTS FOR 3 CLASSMATES */}
+      {activeSubMode === 'peer' && (
+        <div className="grid grid-cols-1 lg:grid-cols-12 gap-5">
+          {/* Left Inputs */}
+          <div className="lg:col-span-5 p-4 rounded-2xl bg-[#0c1222]/90 border border-slate-800 space-y-3 flex flex-col justify-between">
+            <div className="space-y-3">
+              <div>
+                <div className="flex items-center justify-between mb-1">
+                  <label className="text-xs font-bold text-slate-300">Unit ခေါင်းစဉ် (Topic / Context):</label>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setUnitTopic('Unit 7: Globalization, Debt Relief and Global Health');
+                      setClassmatePost('In my opinion, foreign aid is beneficial for poor countries because it builds hospitals and schools. However, corruption often takes away the budget before citizens receive the actual benefits.');
+                    }}
+                    className="text-[10px] text-indigo-400 hover:underline"
+                  >
+                    နမူနာ ထည့်မည်
+                  </button>
+                </div>
+                <input
+                  type="text"
+                  value={unitTopic}
+                  onChange={(e) => setUnitTopic(e.target.value)}
+                  placeholder="e.g. Unit 7: Globalization and Economic Inequality"
+                  className="w-full px-3 py-2 text-xs rounded-xl bg-slate-900 border border-slate-700 text-slate-100 focus:outline-none focus:border-indigo-500"
+                />
+              </div>
+
+              <div>
+                <div className="flex items-center justify-between mb-1">
+                  <label className="text-xs font-bold text-slate-300">Classmate ၏ စာသားကို ကူးထည့်ပါ:</label>
+                  <span className="text-[10px] text-slate-500 font-mono">
+                    {classmatePost.trim() ? classmatePost.trim().split(/\s+/).length : 0} words
+                  </span>
+                </div>
+                <textarea
+                  rows={11}
+                  value={classmatePost}
+                  onChange={(e) => setClassmatePost(e.target.value)}
+                  placeholder="Classmate ရေးထားသော Discussion Post စာသားကို ဤနေရာတွင် ကူးထည့်ပါ..."
+                  className="w-full p-3 text-xs rounded-xl bg-slate-950 border border-slate-800 text-slate-100 placeholder-slate-600 focus:outline-none focus:border-indigo-500 font-mono"
+                />
+              </div>
+            </div>
+
+            <button
+              type="button"
+              onClick={handleGeneratePeer}
+              disabled={peerLoading || !classmatePost.trim()}
+              className="w-full py-2.5 px-4 rounded-xl bg-gradient-to-r from-indigo-600 to-cyan-600 hover:from-indigo-500 hover:to-cyan-500 disabled:opacity-50 text-white font-bold text-xs flex items-center justify-center gap-2 shadow-lg shadow-indigo-950/40 transition-all mt-2"
+            >
+              {peerLoading ? (
+                <>
+                  <div className="w-3.5 h-3.5 border-2 border-white border-t-transparent rounded-full animate-spin" />
+                  <span>Classmate ၃ ယောက်အတွက် Responses များကို ဖွဲ့ဆိုနေသည်...</span>
+                </>
+              ) : (
+                <>
+                  <span>✨</span>
+                  <span>အမှတ်ပြည့် Peer Responses (၃ မျိုး) ထုတ်မည်</span>
+                </>
+              )}
+            </button>
+          </div>
+
+          {/* Right Outputs */}
+          <div className="lg:col-span-7 p-4 rounded-2xl bg-[#0c1222]/90 border border-slate-800 space-y-4">
+            <div className="flex items-center justify-between pb-2 border-b border-slate-800">
+              <span className="text-xs font-bold text-slate-200">အမှတ်ပြည့် PEER RESPONSES ရလဒ်</span>
+              <span className="text-[10px] px-2 py-0.5 rounded-full bg-slate-900 text-indigo-400 border border-slate-800">
+                Rubric 100+ Words & Anti-AI
+              </span>
+            </div>
+
+            {peerLoading ? (
+              <div className="h-72 flex flex-col items-center justify-center space-y-3">
+                <div className="w-8 h-8 border-3 border-indigo-500 border-t-transparent rounded-full animate-spin" />
+                <p className="text-xs text-slate-400">စံနှုန်းမီ Response ၃ ခုကို တွက်ချက်နေပါသည်...</p>
+              </div>
+            ) : peerResult ? (
+              <div className="space-y-3 max-h-[580px] overflow-y-auto pr-1">
+                {peerResult.variants.map((v, idx) => (
+                  <div key={idx} className="p-3.5 rounded-xl bg-slate-900/90 border border-slate-800 space-y-2 text-xs">
+                    <div className="flex items-center justify-between pb-1.5 border-b border-slate-800">
+                      <div className="flex items-center gap-2">
+                        <span className="w-5 h-5 rounded-full bg-indigo-950 text-indigo-400 font-bold text-[10px] flex items-center justify-center border border-indigo-700/50">
+                          #{idx + 1}
+                        </span>
+                        <span className="font-bold text-slate-200">{v.style}</span>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <span className="text-[10px] text-emerald-400 font-mono">
+                          {v.wordCount} words
+                        </span>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            navigator.clipboard.writeText(v.responseEnglishText);
+                            alert(`Variant #${idx + 1} copied!`);
+                          }}
+                          className="px-2 py-0.5 rounded bg-slate-800 hover:bg-slate-700 text-slate-200 text-[10px] border border-slate-700"
+                        >
+                          📋 Copy
+                        </button>
+                      </div>
+                    </div>
+
+                    <p className="text-[11px] text-indigo-300/90 italic">
+                      💡 {v.responseBurmeseGuide}
+                    </p>
+
+                    <div className="p-2.5 rounded-lg bg-slate-950 border border-slate-800">
+                      <p className="font-serif text-slate-200 leading-relaxed">
+                        "{v.responseEnglishText}"
+                      </p>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <div className="h-72 flex flex-col items-center justify-center text-slate-500 text-xs space-y-1">
+                <span>Classmate တစ်ဦး၏ Discussion Post ကို ဘယ်ဘက်တွင် ထည့်သွင်းပြီး ခလုတ်ကို နှိပ်ပါ</span>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* MODE 2: FOLLOW-UP REPLY TO INQUIRY UNDER OWN POST */}
+      {activeSubMode === 'followup' && (
+        <div className="grid grid-cols-1 lg:grid-cols-12 gap-5">
+          {/* Left Inputs */}
+          <div className="lg:col-span-5 p-4 rounded-2xl bg-[#0c1222]/90 border border-slate-800 space-y-3 flex flex-col justify-between">
+            <div className="space-y-3">
+              <div>
+                <label className="text-xs font-bold text-slate-300 block mb-1">
+                  သင်၏ မူရင်း Discussion Post စာသား (Optional/Context):
+                </label>
+                <textarea
+                  rows={4}
+                  value={myOriginalPost}
+                  onChange={(e) => setMyOriginalPost(e.target.value)}
+                  placeholder="Paste your original initial discussion post..."
+                  className="w-full p-2.5 text-xs rounded-xl bg-slate-950 border border-slate-800 text-slate-100 placeholder-slate-600 focus:outline-none focus:border-emerald-500 font-mono"
+                />
+              </div>
+
+              <div>
+                <div className="flex items-center justify-between mb-1.5">
+                  <label className="text-xs font-bold text-slate-300">မေးခွန်းမေးသူ အမျိုးအစား:</label>
+                  <div className="flex items-center gap-1.5 p-1 rounded-lg bg-slate-950 border border-slate-800">
+                    <button
+                      type="button"
+                      onClick={() => setInquirerType('Instructor')}
+                      className={`px-2.5 py-1 rounded text-[11px] font-bold ${
+                        inquirerType === 'Instructor'
+                          ? 'bg-emerald-600 text-white'
+                          : 'text-slate-400 hover:text-slate-200'
+                      }`}
+                    >
+                      🎓 ဆရာ/ဆရာမ (Instructor)
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setInquirerType('Classmate')}
+                      className={`px-2.5 py-1 rounded text-[11px] font-bold ${
+                        inquirerType === 'Classmate'
+                          ? 'bg-emerald-600 text-white'
+                          : 'text-slate-400 hover:text-slate-200'
+                      }`}
+                    >
+                      👥 သူငယ်ချင်း (Classmate)
+                    </button>
+                  </div>
+                </div>
+
+                <textarea
+                  rows={6}
+                  value={theirQuestion}
+                  onChange={(e) => setTheirQuestion(e.target.value)}
+                  placeholder="Paste their follow-up comment or challenging question here..."
+                  className="w-full p-3 text-xs rounded-xl bg-slate-950 border border-slate-800 text-slate-100 placeholder-slate-600 focus:outline-none focus:border-emerald-500 font-mono"
+                />
+              </div>
+            </div>
+
+            <button
+              type="button"
+              onClick={handleGenerateFollowup}
+              disabled={followupLoading || !theirQuestion.trim()}
+              className="w-full py-2.5 px-4 rounded-xl bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 disabled:opacity-50 text-white font-bold text-xs flex items-center justify-center gap-2 shadow-lg shadow-emerald-950/40 transition-all mt-2"
+            >
+              {followupLoading ? (
+                <>
+                  <div className="w-3.5 h-3.5 border-2 border-white border-t-transparent rounded-full animate-spin" />
+                  <span>ပညာရပ်ဆန်ဆန် အဖြေကို ပြင်ဆင်နေသည်...</span>
+                </>
+              ) : (
+                <>
+                  <span>💬</span>
+                  <span>ပညာရပ်ဆန်ဆန် အဖြေထုတ်မည်</span>
+                </>
+              )}
+            </button>
+          </div>
+
+          {/* Right Outputs */}
+          <div className="lg:col-span-7 p-4 rounded-2xl bg-[#0c1222]/90 border border-slate-800 space-y-4">
+            <div className="flex items-center justify-between pb-2 border-b border-slate-800">
+              <span className="text-xs font-bold text-slate-200">ပြန်လည်ဖြေကြားချက် အဆင်သင့် စာသား</span>
+              {followupResult && (
+                <span className="text-[10px] px-2 py-0.5 rounded-full bg-emerald-950 text-emerald-300 border border-emerald-800">
+                  Target: {followupResult.respondentType}
+                </span>
+              )}
+            </div>
+
+            {followupLoading ? (
+              <div className="h-72 flex flex-col items-center justify-center space-y-3">
+                <div className="w-8 h-8 border-3 border-emerald-500 border-t-transparent rounded-full animate-spin" />
+                <p className="text-xs text-slate-400">ကျိုးကြောင်းဆီလျော်သော တုံ့ပြန်ချက်ကို ရေးဖွဲ့နေပါသည်...</p>
+              </div>
+            ) : followupResult ? (
+              <div className="space-y-3.5">
+                <div className="p-3 rounded-xl bg-emerald-950/30 border border-emerald-700/40 text-xs">
+                  <span className="font-bold text-emerald-300 block mb-0.5">🎯 Thesis Alignment Guard:</span>
+                  <p className="text-slate-300 leading-relaxed">{followupResult.thesisAlignmentTip}</p>
+                </div>
+
+                <div className="p-4 rounded-xl bg-slate-900/90 border border-slate-800 space-y-2.5">
+                  <div className="flex items-center justify-between">
+                    <span className="text-xs font-bold text-cyan-300">Ready-to-Post Scholarly Reply:</span>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        navigator.clipboard.writeText(followupResult.readyToSubmitReply);
+                        alert('Reply copied!');
+                      }}
+                      className="px-2.5 py-1 text-xs rounded bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700"
+                    >
+                      📋 Copy
+                    </button>
+                  </div>
+                  <div className="p-3 rounded-lg bg-slate-950 border border-slate-800">
+                    <p className="font-serif text-xs text-slate-200 leading-relaxed italic">
+                      "{followupResult.readyToSubmitReply}"
+                    </p>
+                  </div>
+                </div>
+
+                <div className="p-3 rounded-xl bg-slate-900 border border-slate-800 text-xs space-y-1">
+                  <span className="text-[11px] font-bold text-amber-300">💡 Discourse Follow-up Question:</span>
+                  <p className="text-slate-300 italic">"{followupResult.counterQuestion}"</p>
+                </div>
+              </div>
+            ) : (
+              <div className="h-72 flex flex-col items-center justify-center text-slate-500 text-xs space-y-1">
+                <span>ဆရာ သို့မဟုတ် Classmate မေးထားသော မေးခွန်းကို ဘယ်ဘက်တွင် ထည့်သွင်း၍ စစ်ဆေးပါ</span>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+};
+PART 3: TOP NAVIGATION BAR UPDATE (/src/components/AssignmentWorkspace.tsx)
+In /src/components/AssignmentWorkspace.tsx, replace the two separate tab buttons:
+
+TypeScript
+{/* REPLACE:
+  <button onClick={() => setActiveTab('peer_comments')}>Classmates Peer Comments (၃ ယောက်)</button>
+  <button onClick={() => setActiveTab('post_replies')}>ကိုယ့် post မေးခွန်းများ ပြန်ဖြေစနစ်</button>
+*/}
+
+{/* WITH THIS SINGLE CONSOLIDATED TAB: */}
+<button
+  onClick={() => setActiveTab('discussion_studio')}
+  className={`px-3.5 py-2 text-xs font-bold rounded-xl transition-all ${
+    activeTab === 'discussion_studio'
+      ? 'bg-indigo-600 text-white shadow-md'
+      : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800/50'
+  }`}
+>
+  💬 Discussion Studio (Peer & Follow-up Replies)
+</button>
+And in the tab content area, mount <UnifiedDiscussionStudio/> under activeTab === 'discussion_studio'.
+
+VERIFICATION
+Confirm that the top navigation bar consolidates the two old buttons into a single clean button: 💬 Discussion Studio (Peer & Follow-up Replies).
+
+Inside the studio, toggling between "Classmates (၃) ယောက်အတွက် Comments" and "ကိုယ့် Post မေးခွန်းများ ပြန်ဖြေစနစ်" switches the view instantly without reloading.
+
+Test peer response generation: confirm that 3 distinct variants appear with word counts and Burmese guides.
+
+Test follow-up reply: confirm that it accepts instructor or classmate questions and outputs an academically poised response using your verified Gemini Flash cascade.
+
+Please apply these updates to /src/services/discussionGeminiService.ts, /src/components/UnifiedDiscussionStudio.tsx, and /src/components/AssignmentWorkspace.tsx now.

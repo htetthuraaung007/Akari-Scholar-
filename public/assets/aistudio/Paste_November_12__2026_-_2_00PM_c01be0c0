@@ -1,0 +1,994 @@
+import React, { useState } from 'react';
+import {
+  Document,
+  Packer,
+  Paragraph,
+  TextRun,
+  AlignmentType,
+  PageBreak,
+  Header,
+  PageNumber,
+  ExternalHyperlink
+} from 'docx';
+import { saveAs } from 'file-saver';
+
+interface ApaWordWorkspaceProps {
+  onBackToDashboard?: () => void;
+}
+
+export const ApaWordWorkspace: React.FC<ApaWordWorkspaceProps> = ({ onBackToDashboard }) => {
+  // 1. Template Selector (Assignment Activity vs Discussion Assignment)
+  const [templateType, setTemplateType] = useState<'assignment_activity' | 'discussion_assignment'>('assignment_activity');
+
+  // 2. Custom File Name & Document Metadata
+  const [customFileName, setCustomFileName] = useState('Unit_5_Assignment_Activity');
+  const [assignmentTitle, setAssignmentTitle] = useState('Unit 5 Assignment Activity');
+  const [paperTopicTitle, setPaperTopicTitle] = useState("Myanmar's Womenomics and Development Initiatives");
+  const [institution, setInstitution] = useState('University of the People');
+  const [courseCode, setCourseCode] = useState('POLS 1503-01 AY2027-T1');
+  const [instructorName, setInstructorName] = useState('Innocent Ndock Kong');
+  const [studentName, setStudentName] = useState('Htet Thura Aung');
+  const [submissionDate, setSubmissionDate] = useState('November 5, 2026');
+
+  // 3. Body Content & References
+  const [bodyContent, setBodyContent] = useState('');
+  const [referencesContent, setReferencesContent] = useState('');
+
+  // 4. Citation Engine & Search Sub-Tabs (Pic 6)
+  const [activeSubTab, setActiveSubTab] = useState<'references_finder' | 'turnitin_audit'>('references_finder');
+  const [refSearchQuery, setRefSearchQuery] = useState('');
+  const [integrityInput, setIntegrityInput] = useState('');
+  const [integrityResult, setIntegrityResult] = useState('');
+  const [freeApiAuditing, setFreeApiAuditing] = useState(false);
+
+  // 5. Scribbr Style Source Types Generator (Pics 7, 8, 9)
+  const [showCitationBuilder, setShowCitationBuilder] = useState(false);
+  const [sourceType, setSourceType] = useState<'journal' | 'book' | 'webpage' | 'report' | 'video' | 'news'>('journal');
+  const [citeAuthor, setCiteAuthor] = useState('');
+  const [citeYear, setCiteYear] = useState('');
+  const [citeTitle, setCiteTitle] = useState('');
+  const [citeSource, setCiteSource] = useState('');
+  const [citeUrl, setCiteUrl] = useState('');
+  const [savedReferences, setSavedReferences] = useState<string[]>([]);
+
+  // Word Count Logic (Introduction to Conclusion only, Excludes Title, Word Count line & References)
+  const calculateBodyWordCount = (text: string): number => {
+    if (!text.trim()) return 0;
+    const lines = text.split(/\r?\n/).map(l => l.trim()).filter(Boolean);
+    let count = 0;
+
+    for (const line of lines) {
+      if (/^references\b/i.test(line)) break; // Stop at References
+      if (/^word count\b/i.test(line)) continue; // Ignore word count lines
+
+      const isHeading = line.startsWith('#') || (line.length < 80 && !line.endsWith('.') && !line.includes('('));
+      if (!isHeading) {
+        count += line.split(/\s+/).filter(Boolean).length;
+      }
+    }
+    return count;
+  };
+
+  // Clear Handler
+  const handleClearAll = () => {
+    if (window.confirm('စာတမ်း စာကိုယ်နှင့် References အချက်အလက်အားလုံးကို ရှင်းလင်း (Clear) ပြုလုပ်မည်လားခင်ဗျာ?')) {
+      setBodyContent('');
+      setReferencesContent('');
+      setSavedReferences([]);
+    }
+  };
+
+  // Add Citation (APA Style Guide Rules)
+  const handleAddCitation = () => {
+    if (!citeAuthor.trim() || !citeTitle.trim()) {
+      alert('ရေးသားသူ (Author) နှင့် စာတမ်းခေါင်းစဉ် (Title) ကို ထည့်သွင်းပေးပါခင်ဗျာ။');
+      return;
+    }
+    const author = citeAuthor.trim().endsWith('.') ? citeAuthor.trim() : `${citeAuthor.trim()}.`;
+    const year = citeYear.trim() ? `(${citeYear.trim()}).` : '(n.d.).';
+    const title = citeTitle.trim().endsWith('.') ? citeTitle.trim() : `${citeTitle.trim()}.`;
+    const source = citeSource.trim() ? `${citeSource.trim()}.` : '';
+    const url = citeUrl.trim();
+
+    const formatted = `${author} ${year} ${title} ${source} ${url}`.trim();
+    setSavedReferences(prev => [...prev, formatted]);
+    setReferencesContent(prev => (prev ? prev + '\n' + formatted : formatted));
+    setIntegrityInput(prev => (prev ? prev + '\n' + formatted : formatted));
+    
+    // Reset Form
+    setCiteAuthor('');
+    setCiteYear('');
+    setCiteTitle('');
+    setCiteSource('');
+    setCiteUrl('');
+  };
+
+  // Crossref Free Open API Citation Audit
+  const handleFreeCrossrefAudit = async () => {
+    const query = refSearchQuery.trim() || integrityInput.trim() || referencesContent.trim();
+    if (!query) {
+      alert('ရှာဖွေစစ်ဆေးလိုသော ခေါင်းစဉ် သို့မဟုတ် References စာရင်းကို ထည့်သွင်းပေးပါခင်ဗျာ။');
+      return;
+    }
+
+    setFreeApiAuditing(true);
+    let auditReport = `📊 OPEN-ACCESS CITATION & APA 7TH ACCURACY REPORT\n`;
+    auditReport += `========================================================\n\n`;
+
+    const sample = encodeURIComponent(query.slice(0, 100));
+    try {
+      const res = await fetch(`https://api.crossref.org/works?query.bibliographic=${sample}&rows=1`);
+      if (res.ok) {
+        const data = await res.json();
+        const item = data.message?.items?.[0];
+        if (item) {
+          auditReport += `✅ [Crossref Database မှ အတည်ပြုပြီး]:\n`;
+          auditReport += `• Title: ${item.title?.[0] || 'Unknown'}\n`;
+          auditReport += `• Author(s): ${item.author ? item.author.map((a: any) => `${a.family}, ${a.given?.[0] || ''}.`).join(', ') : 'N/A'}\n`;
+          auditReport += `• DOI Link: https://doi.org/${item.DOI || 'N/A'}\n`;
+          auditReport += `• Published Year: ${item.created?.['date-parts']?.[0]?.[0] || 'N/A'}\n\n`;
+          auditReport += `💡 APA 7th Standard Suggested Format:\n`;
+          const authorText = item.author ? `${item.author[0]?.family || 'Author'}, ${item.author[0]?.given?.[0] || 'A'}.` : 'Author, A.';
+          const yearText = item.created?.['date-parts']?.[0]?.[0] ? `(${item.created['date-parts'][0][0]}).` : '(n.d.).';
+          auditReport += `${authorText} ${yearText} ${item.title?.[0] || 'Title'}. https://doi.org/${item.DOI || ''}\n`;
+        } else {
+          auditReport += `⚠️ Crossref တွင် စာတမ်းအချက်အလက် တိုက်ရိုက် မတွေ့ရှိပါ။ ရင်းမြစ် URL ကို ပြန်လည်စစ်ဆေးပါ။\n`;
+        }
+      }
+    } catch {
+      auditReport += `⚠️ Crossref API ချိတ်ဆက်မှု မအောင်မြင်ပါ။ အင်တာနက် လိုင်းစစ်ဆေးပေးပါခင်ဗျာ။\n`;
+    }
+
+    setIntegrityResult(auditReport);
+    setFreeApiAuditing(false);
+  };
+
+  // Strict DOCX Generator (Zero-API Token, Pixel-Perfect Layout)
+  const handleExportDocx = async () => {
+    const rawBody = bodyContent || '';
+    const allLines = rawBody.split(/\r?\n/).map(l => l.trim()).filter(Boolean);
+
+    // Extract References if entered in Body Textarea
+    let refStartIndex = -1;
+    for (let i = 0; i < allLines.length; i++) {
+      if (/^references\b/i.test(allLines[i])) {
+        refStartIndex = i;
+        break;
+      }
+    }
+
+    const bodyLines = refStartIndex !== -1 ? allLines.slice(0, refStartIndex) : allLines;
+    const extractedRefLines = refStartIndex !== -1 ? allLines.slice(refStartIndex + 1) : [];
+
+    // Combine All References
+    const finalRefLines = extractedRefLines.length > 0
+      ? extractedRefLines
+      : (referencesContent.trim() ? referencesContent.split(/\r?\n/).map(l => l.trim()).filter(Boolean) : savedReferences);
+
+    const calculatedCount = calculateBodyWordCount(bodyContent);
+    const docElements: Paragraph[] = [];
+
+    // ==========================================
+    // 1. COVER / HEADER METADATA SECTION
+    // ==========================================
+    if (templateType === 'assignment_activity') {
+      // ASSIGNMENT ACTIVITY: Clean 3-double-spaces top padding, All Bold, Center Aligned, Tight 2.0 (No gaps)
+      for (let i = 0; i < 3; i++) {
+        docElements.push(
+          new Paragraph({
+            alignment: AlignmentType.CENTER,
+            spacing: { line: 480, before: 0, after: 0 },
+            children: [new TextRun({ text: '', font: 'Times New Roman', size: 24 })],
+          })
+        );
+      }
+
+      const coverMeta = [
+        assignmentTitle || 'Unit 5 Assignment Activity',
+        institution || 'University of the People',
+        courseCode || 'POLS 1503-01 AY2027-T1',
+        instructorName ? `Instructor: ${instructorName}` : 'Instructor: Innocent Ndock Kong',
+        studentName || 'Htet Thura Aung',
+        submissionDate || 'November 5, 2026',
+      ];
+
+      coverMeta.forEach(lineText => {
+        docElements.push(
+          new Paragraph({
+            alignment: AlignmentType.CENTER,
+            spacing: { line: 480, before: 0, after: 0 }, // Strict double spacing, NO gap
+            children: [
+              new TextRun({
+                text: lineText,
+                bold: true, // All Bold as requested
+                font: 'Times New Roman',
+                size: 24, // 12pt
+              }),
+            ],
+          })
+        );
+      });
+
+      // Page Break to Page 2
+      docElements.push(new Paragraph({ children: [new PageBreak()] }));
+
+      // Repeat Title on Page 2 (Bold + Center)
+      docElements.push(
+        new Paragraph({
+          alignment: AlignmentType.CENTER,
+          spacing: { line: 480, before: 0, after: 0 },
+          children: [
+            new TextRun({
+              text: assignmentTitle || 'Unit 5 Assignment Activity',
+              bold: true,
+              font: 'Times New Roman',
+              size: 24,
+            }),
+          ],
+        })
+      );
+    } else {
+      // DISCUSSION ASSIGNMENT: Continuous First Page, No Page Break, All Bold, Centered
+      const discussionMeta = [
+        assignmentTitle || 'Unit 8 Discussion Assignment',
+        institution || 'University of the People',
+        courseCode || 'POLS 1503-01 - AY2027-T1',
+        instructorName ? `Instructor name: ${instructorName}` : 'Instructor name: Innocent Ndock Kong',
+        studentName ? `Student: ${studentName}` : 'Student: Thin Yati Aung',
+        submissionDate ? `Date: ${submissionDate}` : 'Date: October 25, 2026',
+      ];
+
+      discussionMeta.forEach(lineText => {
+        docElements.push(
+          new Paragraph({
+            alignment: AlignmentType.CENTER,
+            spacing: { line: 480, before: 0, after: 0 },
+            children: [
+              new TextRun({
+                text: lineText,
+                bold: true,
+                font: 'Times New Roman',
+                size: 24,
+              }),
+            ],
+          })
+        );
+      });
+
+      // Paper Topic Title (Bold + Center)
+      if (paperTopicTitle.trim()) {
+        docElements.push(
+          new Paragraph({
+            alignment: AlignmentType.CENTER,
+            spacing: { line: 480, before: 0, after: 0 },
+            children: [
+              new TextRun({
+                text: paperTopicTitle.trim(),
+                bold: true,
+                font: 'Times New Roman',
+                size: 24,
+              }),
+            ],
+          })
+        );
+      }
+    }
+
+    // ==========================================
+    // 2. BODY CONTENT (SUBHEADINGS CENTER+BOLD, INDENT 0.5")
+    // ==========================================
+    let hasRenderedWordCount = false;
+
+    bodyLines.forEach(line => {
+      // Manual Word Count Check
+      if (/^word count\b/i.test(line)) {
+        hasRenderedWordCount = true;
+        // User's Word Count: Align Left, ALL BOLD, NOT ITALICIZED
+        docElements.push(
+          new Paragraph({
+            alignment: AlignmentType.LEFT,
+            spacing: { line: 480, before: 240, after: 0 },
+            children: [
+              new TextRun({
+                text: line,
+                bold: true, // Entire line bold
+                italics: false, // NOT italicized
+                font: 'Times New Roman',
+                size: 24,
+              }),
+            ],
+          })
+        );
+        return;
+      }
+
+      const isHeading = line.startsWith('#') || (line.length < 80 && !line.endsWith('.') && !line.includes('('));
+      const cleanLine = line.replace(/^#+\s*/, '').trim();
+
+      if (isHeading) {
+        // ALL HEADINGS & SUBHEADINGS: BOLD + ALIGN CENTER
+        docElements.push(
+          new Paragraph({
+            alignment: AlignmentType.CENTER,
+            spacing: { line: 480, before: 0, after: 0 },
+            children: [
+              new TextRun({
+                text: cleanLine,
+                bold: true, // Bold
+                font: 'Times New Roman',
+                size: 24,
+              }),
+            ],
+          })
+        );
+      } else {
+        // Normal Paragraph: First-line indent 0.5" (720 twips), Double Spacing
+        docElements.push(
+          new Paragraph({
+            alignment: AlignmentType.LEFT,
+            indent: { firstLine: 720 },
+            spacing: { line: 480, before: 0, after: 0 },
+            children: [
+              new TextRun({
+                text: line,
+                font: 'Times New Roman',
+                size: 24,
+              }),
+            ],
+          })
+        );
+      }
+    });
+
+    // Auto-insert Word Count if not manually typed in text
+    if (!hasRenderedWordCount && calculatedCount > 0) {
+      docElements.push(
+        new Paragraph({
+          alignment: AlignmentType.LEFT,
+          spacing: { line: 480, before: 240, after: 0 },
+          children: [
+            new TextRun({
+              text: `Word Count – ${calculatedCount} (not including title & references)`,
+              bold: true,
+              italics: false,
+              font: 'Times New Roman',
+              size: 24,
+            }),
+          ],
+        })
+      );
+    }
+
+    // ==========================================
+    // 3. REFERENCES SECTION (0.5" HANGING INDENT & CLICKABLE BLUE LINKS)
+    // ==========================================
+    if (finalRefLines.length > 0) {
+      // Assignment Activity has PageBreak; Discussion Assignment continues seamlessly
+      if (templateType === 'assignment_activity') {
+        docElements.push(new Paragraph({ children: [new PageBreak()] }));
+      }
+
+      // References Title (Center, Bold)
+      docElements.push(
+        new Paragraph({
+          alignment: AlignmentType.CENTER,
+          spacing: { line: 480, before: templateType === 'discussion_assignment' ? 240 : 0, after: 0 },
+          children: [
+            new TextRun({
+              text: 'References',
+              bold: true,
+              font: 'Times New Roman',
+              size: 24,
+            }),
+          ],
+        })
+      );
+
+      finalRefLines.forEach(refText => {
+        const urlMatch = refText.match(/(https?:\/\/[^\s]+)/g);
+
+        if (urlMatch && urlMatch[0]) {
+          const url = urlMatch[0];
+          const parts = refText.split(url);
+          const beforeText = parts[0] || '';
+          const afterText = parts[1] || '';
+
+          docElements.push(
+            new Paragraph({
+              alignment: AlignmentType.LEFT,
+              indent: { left: 720, hanging: 720 }, // 0.5" Hanging Indent
+              spacing: { line: 480, before: 0, after: 0 },
+              children: [
+                new TextRun({
+                  text: beforeText,
+                  font: 'Times New Roman',
+                  size: 24,
+                }),
+                // Clickable, Underlined, Blue Hyperlink as per APA 7th
+                new ExternalHyperlink({
+                  children: [
+                    new TextRun({
+                      text: url,
+                      underline: {},
+                      color: '0563C1', // Standard Word Blue
+                      font: 'Times New Roman',
+                      size: 24,
+                    }),
+                  ],
+                  link: url,
+                }),
+                new TextRun({
+                  text: afterText,
+                  font: 'Times New Roman',
+                  size: 24,
+                }),
+              ],
+            })
+          );
+        } else {
+          docElements.push(
+            new Paragraph({
+              alignment: AlignmentType.LEFT,
+              indent: { left: 720, hanging: 720 },
+              spacing: { line: 480, before: 0, after: 0 },
+              children: [
+                new TextRun({
+                  text: refText,
+                  font: 'Times New Roman',
+                  size: 24,
+                }),
+              ],
+            })
+          );
+        }
+      });
+    }
+
+    // ==========================================
+    // 4. DOCUMENT PACKAGING
+    // ==========================================
+    const sectionHeaders = templateType === 'assignment_activity' ? {
+      default: new Header({
+        children: [
+          new Paragraph({
+            alignment: AlignmentType.RIGHT,
+            spacing: { before: 0, after: 0 },
+            children: [
+              new TextRun({
+                children: [PageNumber.CURRENT],
+                font: 'Times New Roman',
+                size: 24,
+              }),
+            ],
+          }),
+        ],
+      }),
+    } : undefined;
+
+    const doc = new Document({
+      sections: [
+        {
+          properties: {
+            page: {
+              margin: {
+                top: 1440,    // 1 inch
+                bottom: 1440, // 1 inch
+                left: 1440,   // 1 inch
+                right: 1440,  // 1 inch
+              },
+            },
+          },
+          headers: sectionHeaders,
+          children: docElements,
+        },
+      ],
+    });
+
+    const blob = await Packer.toBlob(doc);
+    const fileName = (customFileName.trim() || 'Assignment_Paper')
+      .replace(/[^a-zA-Z0-9_\-]/g, '_')
+      .concat('.docx');
+    saveAs(blob, fileName);
+  };
+
+  const handlePrintPdf = () => {
+    window.print();
+  };
+
+  const currentWordCount = calculateBodyWordCount(bodyContent);
+
+  return (
+    <div className="space-y-4">
+      {/* Top Header Bar & Custom File Name */}
+      <div className="p-3.5 rounded-2xl bg-[#0c1222]/90 border border-slate-800 flex items-center justify-between flex-wrap gap-2">
+        <div className="flex items-center gap-2">
+          {onBackToDashboard && (
+            <button
+              type="button"
+              onClick={onBackToDashboard}
+              className="px-2.5 py-1 rounded-xl bg-slate-900 hover:bg-slate-800 text-slate-300 border border-slate-700 text-xs font-bold transition-all"
+            >
+              ← Back
+            </button>
+          )}
+          <span className="text-xs font-bold text-slate-200 flex items-center gap-1.5">
+            <span>📄</span> APA 7th Reference & Word (.docx / PDF) စနစ်တကျ ထုတ်ယူမှု
+          </span>
+        </div>
+
+        {/* Custom File Name Input */}
+        <div className="flex items-center gap-2">
+          <label className="text-[11px] font-bold text-slate-400">File Name:</label>
+          <input
+            type="text"
+            value={customFileName}
+            onChange={(e) => setCustomFileName(e.target.value)}
+            placeholder="Unit_5_Assignment_Activity"
+            className="p-1.5 px-3 text-xs rounded-xl bg-slate-950 border border-slate-700 text-slate-100 font-mono w-72 focus:outline-none focus:border-indigo-500"
+          />
+        </div>
+      </div>
+
+      {/* Warning Alert Banner (Conversational Tone) */}
+      <div className="p-3.5 rounded-2xl bg-amber-950/30 border border-amber-800/40 text-xs text-amber-300 flex items-start gap-2.5 leading-relaxed">
+        <span className="text-base shrink-0">⚠️</span>
+        <div>
+          <strong>အရေးကြီး သတိပေးချက်:</strong> စနစ်က APA 7th စံနှုန်းအတိုင်း တိကျစွာ ထုတ်ပေးထားသော်လည်း ဤ template တစ်ခုတည်းကို ၁၀၀% မယုံကြည်ဘဲ စာတမ်းမတင်မီ Title Page, Indentation, Double Spacing နှင့် References Link များကို သင့် Microsoft Word တွင် ကိုယ်တိုင် နောက်ဆုံးအကြိမ် ပြန်လည်စစ်ဆေးပေးပါခင်ဗျာ[cite: 24]။
+        </div>
+      </div>
+
+      {/* Template Mode Switcher (Pill Selector) */}
+      <div className="p-3.5 rounded-2xl bg-[#0c1222]/90 border border-slate-800 flex items-center justify-between flex-wrap gap-2">
+        <div className="flex items-center gap-2">
+          <span className="text-xs font-bold text-slate-300">Template စနစ် ရွေးချယ်ရန်:</span>
+          <div className="flex items-center gap-1.5">
+            <button
+              type="button"
+              onClick={() => {
+                setTemplateType('assignment_activity');
+                setCustomFileName('Unit_5_Assignment_Activity');
+                setAssignmentTitle('Unit 5 Assignment Activity');
+              }}
+              className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all flex items-center gap-1.5 ${
+                templateType === 'assignment_activity'
+                  ? 'bg-indigo-600 text-white shadow'
+                  : 'bg-slate-950 text-slate-400 border border-slate-800 hover:text-slate-200'
+              }`}
+            >
+              <span>📋</span> 1. Assignment Activity Template
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                setTemplateType('discussion_assignment');
+                setCustomFileName('Unit_8_globalization_discussion_assignment');
+                setAssignmentTitle('Unit 8 Discussion Assignment');
+              }}
+              className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all flex items-center gap-1.5 ${
+                templateType === 'discussion_assignment'
+                  ? 'bg-indigo-600 text-white shadow'
+                  : 'bg-slate-950 text-slate-400 border border-slate-800 hover:text-slate-200'
+              }`}
+            >
+              <span>💬</span> 2. Discussion Assignment Template
+            </button>
+          </div>
+        </div>
+
+        <span className="text-[10px] font-mono text-emerald-400 bg-emerald-950/50 px-2.5 py-1 rounded-xl border border-emerald-800/40">
+          {templateType === 'assignment_activity' ? 'Cover Page Centered + Page Numbers' : 'No Page Numbers + Seamless Ref'}
+        </span>
+      </div>
+
+      {/* Metadata Configuration Bar */}
+      <div className="p-4 rounded-2xl bg-[#0c1222]/90 border border-slate-800 space-y-3">
+        <span className="text-xs font-bold text-indigo-300 block">
+          {templateType === 'assignment_activity' ? 'Title Page အချက်အလက်များ (All Bold & Center Aligned):' : 'Header Metadata အချက်အလက်များ (All Bold & Center Aligned):'}
+        </span>
+        <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-2.5">
+          <div>
+            <label className="text-[10px] text-slate-400 font-semibold block mb-0.5">Assignment Title:</label>
+            <input
+              type="text"
+              value={assignmentTitle}
+              onChange={(e) => setAssignmentTitle(e.target.value)}
+              className="w-full p-2 text-xs rounded-xl bg-slate-950 border border-slate-800 text-slate-200 font-mono"
+            />
+          </div>
+          {templateType === 'discussion_assignment' && (
+            <div>
+              <label className="text-[10px] text-amber-300 font-semibold block mb-0.5">Paper Topic Title (ခေါင်းစဉ်အပြည့်အစုံ):</label>
+              <input
+                type="text"
+                value={paperTopicTitle}
+                onChange={(e) => setPaperTopicTitle(e.target.value)}
+                placeholder="The Impact of GMOs, Globalization..."
+                className="w-full p-2 text-xs rounded-xl bg-slate-950 border border-amber-600/50 text-slate-200 font-mono"
+              />
+            </div>
+          )}
+          <div>
+            <label className="text-[10px] text-slate-400 font-semibold block mb-0.5">Institution:</label>
+            <input
+              type="text"
+              value={institution}
+              onChange={(e) => setInstitution(e.target.value)}
+              className="w-full p-2 text-xs rounded-xl bg-slate-950 border border-slate-800 text-slate-200 font-mono"
+            />
+          </div>
+          <div>
+            <label className="text-[10px] text-slate-400 font-semibold block mb-0.5">Course Code & Term:</label>
+            <input
+              type="text"
+              value={courseCode}
+              onChange={(e) => setCourseCode(e.target.value)}
+              className="w-full p-2 text-xs rounded-xl bg-slate-950 border border-slate-800 text-slate-200 font-mono"
+            />
+          </div>
+          <div>
+            <label className="text-[10px] text-slate-400 font-semibold block mb-0.5">Instructor Name:</label>
+            <input
+              type="text"
+              value={instructorName}
+              onChange={(e) => setInstructorName(e.target.value)}
+              className="w-full p-2 text-xs rounded-xl bg-slate-950 border border-slate-800 text-slate-200 font-mono"
+            />
+          </div>
+          <div>
+            <label className="text-[10px] text-slate-400 font-semibold block mb-0.5">Student Name:</label>
+            <input
+              type="text"
+              value={studentName}
+              onChange={(e) => setStudentName(e.target.value)}
+              className="w-full p-2 text-xs rounded-xl bg-slate-950 border border-slate-800 text-slate-200 font-mono"
+            />
+          </div>
+          <div>
+            <label className="text-[10px] text-slate-400 font-semibold block mb-0.5">Submission Date:</label>
+            <input
+              type="text"
+              value={submissionDate}
+              onChange={(e) => setSubmissionDate(e.target.value)}
+              className="w-full p-2 text-xs rounded-xl bg-slate-950 border border-slate-800 text-slate-200 font-mono"
+            />
+          </div>
+        </div>
+      </div>
+
+      {/* Main Body Editor Area */}
+      <div className="p-4 rounded-2xl bg-[#0c1222]/90 border border-slate-800 space-y-3">
+        <div className="flex items-center justify-between flex-wrap gap-2 pb-2 border-b border-slate-800">
+          <div className="flex items-center gap-2">
+            <span className="text-xs font-bold text-slate-200">စာတမ်း စာကိုယ် (Introduction to Conclusion):</span>
+            <span className="px-2 py-0.5 rounded-lg bg-indigo-950 text-indigo-300 font-mono text-[11px] font-bold border border-indigo-800/40">
+              Word Count: {currentWordCount} words
+            </span>
+          </div>
+
+          <button
+            type="button"
+            onClick={handleClearAll}
+            className="px-2.5 py-1 rounded-xl bg-rose-950/40 hover:bg-rose-900/60 border border-rose-800/50 text-rose-300 text-xs font-bold transition-all flex items-center gap-1"
+          >
+            <span>🗑️</span> စာကိုယ် Clear လုပ်မည်[cite: 24]
+          </button>
+        </div>
+
+        <textarea
+          rows={12}
+          value={bodyContent}
+          onChange={(e) => setBodyContent(e.target.value)}
+          placeholder="Introduction မှစတင်၍ စာကိုယ်တစ်ခုလုံးကို ဤနေရာတွင် ထည့်ပါ (နံပါတ်စဉ်တပ်ထားသော ခေါင်းစဉ်ခွဲများသည် Word တွင် Bold + Center အလိုအလျောက် ဖြစ်သွားပါမည်)..."
+          className="w-full p-3 text-xs rounded-xl bg-slate-950 border border-slate-800 text-slate-100 placeholder-slate-600 focus:outline-none focus:border-indigo-500 font-mono leading-relaxed"
+        />
+
+        {/* References Input Box */}
+        <div>
+          <label className="text-[11px] font-bold text-indigo-300 block mb-1">
+            References စာရင်း (0.5" Hanging Indent နှင့် Clickable Underlined Blue Link များ အလိုအလျောက် ဖွဲ့စည်းပေးပါမည်):
+          </label>
+          <textarea
+            rows={5}
+            value={referencesContent}
+            onChange={(e) => setReferencesContent(e.target.value)}
+            placeholder="Council on Foreign Relations. (2018, March 16). What is global health? https://education.cfr.org/..."
+            className="w-full p-3 text-xs rounded-xl bg-slate-950 border border-slate-800 text-slate-100 placeholder-slate-600 focus:outline-none focus:border-indigo-500 font-mono leading-relaxed"
+          />
+        </div>
+
+        {/* DOCX & PDF Export Buttons */}
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-2">
+          <button
+            type="button"
+            onClick={handleExportDocx}
+            className="py-3 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white font-bold text-xs shadow-md transition-all flex items-center justify-center gap-2"
+          >
+            <span>📥</span>
+            <span>{customFileName}.docx ဒေါင်းလုဒ်ရယူမည် ({templateType === 'discussion_assignment' ? 'Discussion Format' : 'Assignment Activity Format'})</span>
+          </button>
+
+          <button
+            type="button"
+            onClick={handlePrintPdf}
+            className="py-3 rounded-xl bg-slate-900 hover:bg-slate-800 border border-slate-700 text-slate-200 font-bold text-xs shadow transition-all flex items-center justify-center gap-2"
+          >
+            <span>🖨️</span>
+            <span>PDF File အနေဖြင့် ထုတ်ယူ/Print ပြုလုပ်မည်</span>
+          </button>
+        </div>
+      </div>
+
+      {/* ========================================================= */}
+      {/* ACADEMIC REFERENCES & CITATION ENGINE (PICS 5, 6, 7, 8, 9) */}
+      {/* ========================================================= */}
+      <div className="space-y-4">
+        {/* External Citation Generator Hub Links */}
+        <div className="p-4 rounded-2xl bg-[#0a101f] border border-slate-800 space-y-3">
+          <div className="flex items-center justify-between pb-1 border-b border-slate-800/80">
+            <span className="text-xs font-bold text-slate-200 flex items-center gap-1.5">
+              <span>🌐</span> Online APA 7th Citation Generators (New Tab ဖြင့် ဖွင့်နိုင်သည်):
+            </span>
+            <span className="text-[10px] text-slate-500 font-mono">Verified APA Tools</span>
+          </div>
+
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-3 pt-1">
+            <a
+              href="https://www.scribbr.com/citation/generator/"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="p-3 rounded-xl bg-slate-950 border border-slate-800 hover:border-indigo-500/60 transition-all flex justify-between items-center group"
+            >
+              <div>
+                <span className="text-xs font-bold text-slate-200 group-hover:text-indigo-300">Scribbr Citation Generator</span>
+                <p className="text-[10px] text-slate-400 mt-0.5">APA 7th official engine</p>
+              </div>
+              <span className="text-[11px] text-indigo-400">ဖွင့်မည် ↗</span>
+            </a>
+
+            <a
+              href="https://www.citationmachine.net/apa"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="p-3 rounded-xl bg-slate-950 border border-slate-800 hover:border-indigo-500/60 transition-all flex justify-between items-center group"
+            >
+              <div>
+                <span className="text-xs font-bold text-slate-200 group-hover:text-indigo-300">Citation Machine APA</span>
+                <p className="text-[10px] text-slate-400 mt-0.5">Fast bibliography builder</p>
+              </div>
+              <span className="text-[11px] text-indigo-400">ဖွင့်မည် ↗</span>
+            </a>
+
+            <a
+              href="https://www.mybib.com/#/projects/S5hvRM/citations"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="p-3 rounded-xl bg-slate-950 border border-slate-800 hover:border-indigo-500/60 transition-all flex justify-between items-center group"
+            >
+              <div>
+                <span className="text-xs font-bold text-slate-200 group-hover:text-indigo-300">MyBib Citation Maker</span>
+                <p className="text-[10px] text-slate-400 mt-0.5">Free, accurate reference lists</p>
+              </div>
+              <span className="text-[11px] text-indigo-400">ဖွင့်မည် ↗</span>
+            </a>
+          </div>
+        </div>
+
+        {/* References Sub-Tabs Switcher (From Pic 6) */}
+        <div className="flex items-center gap-2 p-1.5 rounded-xl bg-slate-950 border border-slate-800 w-fit">
+          <button
+            type="button"
+            onClick={() => setActiveSubTab('references_finder')}
+            className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all flex items-center gap-1.5 ${
+              activeSubTab === 'references_finder'
+                ? 'bg-rose-600 text-white shadow'
+                : 'text-slate-400 hover:text-slate-200'
+            }`}
+          >
+            <span>📚</span> Academic References ရှာဖွေ/စစ်ဆေးမည်
+          </button>
+          <button
+            type="button"
+            onClick={() => setActiveSubTab('turnitin_audit')}
+            className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all flex items-center gap-1.5 ${
+              activeSubTab === 'turnitin_audit'
+                ? 'bg-rose-600 text-white shadow'
+                : 'text-slate-400 hover:text-slate-200'
+            }`}
+          >
+            <span>🛡️</span> Turnitin Similarity Shield
+          </button>
+        </div>
+
+        {/* SUB-TAB 1: ACADEMIC REFERENCES FINDER */}
+        {activeSubTab === 'references_finder' && (
+          <div className="space-y-4">
+            {/* Open-Access Databases (7 Hubs) */}
+            <div className="p-4 rounded-2xl bg-[#0c1222]/90 border border-rose-900/30 space-y-3">
+              <div className="flex items-center justify-between">
+                <span className="text-xs font-bold text-rose-300 flex items-center gap-1.5">
+                  <span>🔎</span> စာတမ်းခေါင်းစဉ် (Topic/Title) ဖြင့် အခမဲ့ Academic Sources များ တိုက်ရိုက်ရှာဖွေရန်:
+                </span>
+                <span className="text-[10px] text-slate-500 font-mono">Open in New Tab ↗</span>
+              </div>
+
+              <div className="flex gap-2">
+                <input
+                  type="text"
+                  value={refSearchQuery}
+                  onChange={(e) => setRefSearchQuery(e.target.value)}
+                  placeholder="ဥပမာ - Womenomics or Sustainable Development or specific DOI..."
+                  className="flex-1 p-2.5 text-xs rounded-xl bg-slate-950 border border-slate-800 text-slate-100 placeholder-slate-600 font-mono focus:outline-none focus:border-rose-500"
+                />
+                <button
+                  type="button"
+                  onClick={handleFreeCrossrefAudit}
+                  disabled={freeApiAuditing}
+                  className="px-4 py-2 rounded-xl bg-rose-600 hover:bg-rose-500 text-white text-xs font-bold shadow transition-all shrink-0"
+                >
+                  {freeApiAuditing ? 'စစ်ဆေးနေပါသည်...' : '⚡ Crossref Free ရှာမည်'}
+                </button>
+              </div>
+
+              <div className="pt-1">
+                <div className="grid grid-cols-2 sm:grid-cols-4 md:grid-cols-7 gap-2">
+                  {[
+                    { name: 'Google Scholar', url: `https://scholar.google.com/scholar?q=${encodeURIComponent(refSearchQuery || 'Academic research')}` },
+                    { name: 'BASE Search', url: `https://www.base-search.net/Search/Results?lookfor=${encodeURIComponent(refSearchQuery || 'Research')}` },
+                    { name: 'CORE UK', url: `https://core.ac.uk/search?q=${encodeURIComponent(refSearchQuery || 'Research')}` },
+                    { name: 'Internet Archive', url: `https://scholar.archive.org/search?q=${encodeURIComponent(refSearchQuery || 'Research')}` },
+                    { name: 'JURN Search', url: `https://www.jurn.link/#gsc.tab=0&gsc.q=${encodeURIComponent(refSearchQuery || 'Research')}` },
+                    { name: 'ScienceDirect', url: `https://www.sciencedirect.com/search?qs=${encodeURIComponent(refSearchQuery || 'Research')}` },
+                    { name: 'UNESCO UNESDOC', url: `https://unesdoc.unesco.org/search/${encodeURIComponent(refSearchQuery || 'Education')}` }
+                  ].map((db, idx) => (
+                    <a
+                      key={idx}
+                      href={db.url}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="p-2 rounded-xl bg-slate-950 border border-slate-800 hover:border-rose-500/60 transition-all text-center group"
+                    >
+                      <span className="text-[11px] font-bold text-slate-300 group-hover:text-rose-300 block">{db.name}</span>
+                      <span className="text-[9px] text-rose-400 font-mono">ရှာဖွေမည် ↗</span>
+                    </a>
+                  ))}
+                </div>
+              </div>
+            </div>
+
+            {/* Toggle Citation Builder (Scribbr Style Source Types - Pics 7, 8, 9) */}
+            <div className="p-4 rounded-2xl bg-[#0c1222]/90 border border-slate-800 space-y-3">
+              <div className="flex items-center justify-between">
+                <span className="text-xs font-bold text-indigo-300">
+                  ✏️ APA 7th Citation Generator (Scribbr Style Source Selector)
+                </span>
+                <button
+                  type="button"
+                  onClick={() => setShowCitationBuilder(!showCitationBuilder)}
+                  className="px-2.5 py-1 rounded-xl bg-slate-900 hover:bg-slate-800 border border-slate-700 text-slate-300 text-xs font-bold"
+                >
+                  {showCitationBuilder ? '▲ ပိတ်မည်' : '▼ Citation တည်ဆောက်မည်'}
+                </button>
+              </div>
+
+              {showCitationBuilder && (
+                <div className="space-y-3 pt-2">
+                  {/* Source Type Pills */}
+                  <div className="flex items-center gap-2 flex-wrap">
+                    {(['journal', 'book', 'webpage', 'report', 'video', 'news'] as const).map(type => (
+                      <button
+                        key={type}
+                        type="button"
+                        onClick={() => setSourceType(type)}
+                        className={`px-3 py-1.5 rounded-xl text-xs font-bold capitalize transition-all ${
+                          sourceType === type ? 'bg-indigo-600 text-white shadow' : 'bg-slate-950 text-slate-400 border border-slate-800'
+                        }`}
+                      >
+                        {type === 'journal' ? '📄 Journal Article' : type === 'book' ? '📚 Book' : type === 'webpage' ? '🌐 Webpage' : type === 'report' ? '📑 Report' : type === 'video' ? '🎥 Video' : '📰 News'}
+                      </button>
+                    ))}
+                  </div>
+
+                  <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-2.5">
+                    <div>
+                      <label className="text-[10px] text-slate-400 font-semibold block mb-0.5">Author(s):</label>
+                      <input
+                        type="text"
+                        value={citeAuthor}
+                        onChange={(e) => setCiteAuthor(e.target.value)}
+                        placeholder="e.g. Elysia, J., & Devi, N. L. P. C."
+                        className="w-full p-2 text-xs rounded-xl bg-slate-950 border border-slate-800 text-slate-200 font-mono"
+                      />
+                    </div>
+                    <div>
+                      <label className="text-[10px] text-slate-400 font-semibold block mb-0.5">Year:</label>
+                      <input
+                        type="text"
+                        value={citeYear}
+                        onChange={(e) => setCiteYear(e.target.value)}
+                        placeholder="e.g. 2023"
+                        className="w-full p-2 text-xs rounded-xl bg-slate-950 border border-slate-800 text-slate-200 font-mono"
+                      />
+                    </div>
+                    <div>
+                      <label className="text-[10px] text-slate-400 font-semibold block mb-0.5">Title:</label>
+                      <input
+                        type="text"
+                        value={citeTitle}
+                        onChange={(e) => setCiteTitle(e.target.value)}
+                        placeholder="Article or page title..."
+                        className="w-full p-2 text-xs rounded-xl bg-slate-950 border border-slate-800 text-slate-200 font-mono"
+                      />
+                    </div>
+                    <div>
+                      <label className="text-[10px] text-slate-400 font-semibold block mb-0.5">Journal / Publisher:</label>
+                      <input
+                        type="text"
+                        value={citeSource}
+                        onChange={(e) => setCiteSource(e.target.value)}
+                        placeholder="Journal name or publisher..."
+                        className="w-full p-2 text-xs rounded-xl bg-slate-950 border border-slate-800 text-slate-200 font-mono"
+                      />
+                    </div>
+                    <div className="sm:col-span-2">
+                      <label className="text-[10px] text-slate-400 font-semibold block mb-0.5">DOI or URL:</label>
+                      <input
+                        type="text"
+                        value={citeUrl}
+                        onChange={(e) => setCiteUrl(e.target.value)}
+                        placeholder="https://doi.org/10.1080/... or website link"
+                        className="w-full p-2 text-xs rounded-xl bg-slate-950 border border-slate-800 text-slate-200 font-mono"
+                      />
+                    </div>
+                  </div>
+
+                  <button
+                    type="button"
+                    onClick={handleAddCitation}
+                    className="px-4 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white font-bold text-xs shadow transition-all"
+                  >
+                    + Reference စာရင်းထဲသို့ ထည့်သွင်းမည်
+                  </button>
+                </div>
+              )}
+            </div>
+
+            {/* Saved References Box & Audit Output */}
+            <div className="grid grid-cols-1 lg:grid-cols-12 gap-4">
+              <div className="lg:col-span-6 p-4 rounded-2xl bg-[#0c1222]/90 border border-slate-800 space-y-3">
+                <span className="text-xs font-bold text-slate-200 block">
+                  သိမ်းဆည်းထားသော APA 7th References စာရင်း ({savedReferences.length}):
+                </span>
+                <textarea
+                  rows={8}
+                  value={integrityInput}
+                  onChange={(e) => setIntegrityInput(e.target.value)}
+                  placeholder="APA 7th References များကို ဤနေရာတွင် စစ်ဆေးနိုင်ပါသည်..."
+                  className="w-full p-3 text-xs rounded-xl bg-slate-950 border border-slate-800 text-slate-100 font-mono leading-relaxed focus:outline-none focus:border-indigo-500"
+                />
+              </div>
+
+              <div className="lg:col-span-6 p-4 rounded-2xl bg-[#0c1222]/90 border border-slate-800 space-y-3">
+                <span className="text-xs font-bold text-slate-200 block">
+                  APA FORMAT တိကျမှု & CROSSREF AUDIT ရလဒ်
+                </span>
+                <div className="h-[170px] overflow-y-auto p-3 rounded-xl bg-slate-950 border border-slate-800 text-xs text-slate-200 font-mono leading-relaxed whitespace-pre-wrap">
+                  {integrityResult || 'ခေါင်းစဉ် ရိုက်ထည့်ပြီး "Crossref Free ရှာမည်" ကို နှိပ်ပါ...'}
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* SUB-TAB 2: TURNITIN SIMILARITY SHIELD */}
+        {activeSubTab === 'turnitin_audit' && (
+          <div className="p-4 rounded-2xl bg-[#0c1222]/90 border border-slate-800 space-y-3">
+            <span className="text-xs font-bold text-rose-300 block">🛡️ Turnitin Similarity Shield</span>
+            <p className="text-xs text-slate-300 leading-relaxed">
+              References စာရင်းများတွင် ပါဝင်သော စံသတ်မှတ်ချက် bibliographic entries များကို Turnitin တွင် similarity အဖြစ် မဖမ်းမိစေရန် Word စာတမ်းအဆုံးတွင် သီးခြားစာမျက်နှာဖြင့် ခွဲထုတ်ထားပြီး ဖြစ်ပါသည်။ Assignment မတင်မီ ဆရာ့ထံတွင် <em>"Exclude Bibliography"</em> filter ဖွင့်ထားပေးရန် ကြိုတင် အသိပေးနိုင်ပါသည်ခင်ဗျာ။
+            </p>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+};

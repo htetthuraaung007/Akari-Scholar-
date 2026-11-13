@@ -1,0 +1,571 @@
+Role: Senior Frontend Systems Architect & Academic Analytics Specialist.
+
+Objective:
+Refactor `/src/components/CgpaCalculatorStudio.tsx` (and supporting utilities in `/src/utils/cgpaAnalytics.ts`) in the "Akari Scholar" Web App.
+Upgrade the existing CGPA Calculator and Target Simulator into an enterprise-grade academic tracking suite incorporating all 5 core enhancements:
+1. Smart Status Badges: Scholarship Safety (< 3.00 Warning, >= 3.00 Safe) and UoPeople Academic Honors (Summa Cum Laude, Magna Cum Laude, Cum Laude, Academic Probation).
+2. What-If Scenario Target Planner: Computes Required GPA per remaining credit hour, Maximum Achievable CGPA ceiling, and letter-grade distribution simulation.
+3. Automated Calendar Integration: Auto-generates sequential Terms (e.g. 2026 Term 2 -> 2026 Term 3 -> 2026 Term 4 -> 2026 Term 5 -> 2027 Term 1) with 1 click without manual typing.
+4. UoPeople Standard Grading & Transfer Credits (TC): Full 11-point grade scale (A to F) plus Transfer Credit (TC: 0 GPA weight, counts toward 120/60 degree completion progress bar).
+5. Data Resilience & Fast Intake: JSON/CSV local backup/restore and raw portal grade text auto-parser.
+
+---
+
+### PART 1: CORE ACADEMIC ENGINE & ANALYTICS (`/src/utils/cgpaAnalytics.ts`)
+
+Create or update `/src/utils/cgpaAnalytics.ts`:
+
+```typescript
+export type UoPeopleGrade = 'A' | 'A-' | 'B+' | 'B' | 'B-' | 'C+' | 'C' | 'C-' | 'D+' | 'D' | 'F' | 'TC';
+
+export const GRADE_POINTS: Record<UoPeopleGrade, number | null> = {
+  'A': 4.00,
+  'A-': 3.67,
+  'B+': 3.33,
+  'B': 3.00,
+  'B-': 2.67,
+  'C+': 2.33,
+  'C': 2.00,
+  'C-': 1.67,
+  'D+': 1.33,
+  'D': 1.00,
+  'F': 0.00,
+  'TC': null // Transfer Credit: Excluded from GPA calculation, included in total earned credits
+};
+
+export interface CourseRecord {
+  id: string;
+  code: string;
+  credits: number;
+  grade: UoPeopleGrade;
+}
+
+export interface TermRecord {
+  id: string;
+  termName: string;
+  courses: CourseRecord[];
+}
+
+export interface CgpaSummary {
+  cumulativeGpa: number;
+  totalGpaCredits: number;
+  totalEarnedCredits: number; // Includes TC
+  totalQualityPoints: number;
+  honorsBadge: { label: string; color: string };
+  scholarshipStatus: { safe: boolean; label: string; color: string };
+}
+
+export function calculateCgpa(terms: TermRecord[]): CgpaSummary {
+  let totalQualityPoints = 0;
+  let totalGpaCredits = 0;
+  let totalEarnedCredits = 0;
+
+  terms.forEach(term => {
+    term.courses.forEach(course => {
+      const pts = GRADE_POINTS[course.grade];
+      if (pts !== null) {
+        totalQualityPoints += pts * course.credits;
+        totalGpaCredits += course.credits;
+        if (course.grade !== 'F') {
+          totalEarnedCredits += course.credits;
+        }
+      } else if (course.grade === 'TC') {
+        totalEarnedCredits += course.credits;
+      }
+    });
+  });
+
+  const cumulativeGpa = totalGpaCredits > 0 
+    ? Math.min(4.00, Math.round((totalQualityPoints / totalGpaCredits) * 100) / 100) 
+    : 0.00;
+
+  // Academic Honors & Standing
+  let honorsBadge = { label: 'Good Standing', color: 'text-slate-300 bg-slate-800 border-slate-700' };
+  if (cumulativeGpa >= 3.85 && totalEarnedCredits >= 30) {
+    honorsBadge = { label: '🏆 Summa Cum Laude', color: 'text-amber-300 bg-amber-950/60 border-amber-500/40' };
+  } else if (cumulativeGpa >= 3.70 && totalEarnedCredits >= 30) {
+    honorsBadge = { label: '🎖️ Magna Cum Laude', color: 'text-purple-300 bg-purple-950/60 border-purple-500/40' };
+  } else if (cumulativeGpa >= 3.50 && totalEarnedCredits >= 30) {
+    honorsBadge = { label: '⭐ Cum Laude', color: 'text-blue-300 bg-blue-950/60 border-blue-500/40' };
+  } else if (cumulativeGpa < 2.00 && totalGpaCredits >= 12) {
+    honorsBadge = { label: '🚨 Academic Probation Warning', color: 'text-rose-300 bg-rose-950/60 border-rose-500/40' };
+  }
+
+  // Scholarship Standing (< 3.00 vs >= 3.00)
+  const scholarshipStatus = cumulativeGpa >= 3.00
+    ? { safe: true, label: '🟢 Scholarship Safe (>= 3.00)', color: 'text-emerald-300 bg-emerald-950/60 border-emerald-500/40' }
+    : { safe: false, label: '⚠️ Scholarship At Risk (< 3.00)', color: 'text-amber-400 bg-amber-950/60 border-amber-500/40' };
+
+  return {
+    cumulativeGpa,
+    totalGpaCredits,
+    totalEarnedCredits,
+    totalQualityPoints,
+    honorsBadge,
+    scholarshipStatus
+  };
+}
+
+export interface TargetAnalysis {
+  isAchieved: boolean;
+  isMathematicallyImpossible: boolean;
+  requiredGpa: number;
+  maxAchievableGpa: number;
+  recommendationText: string;
+}
+
+export function calculateTargetScenario(
+  currentQualityPoints: number,
+  currentGpaCredits: number,
+  targetGpa: number,
+  remainingCredits: number
+): TargetAnalysis {
+  if (remainingCredits <= 0) {
+    const currGpa = currentGpaCredits > 0 ? currentQualityPoints / currentGpaCredits : 0;
+    return {
+      isAchieved: currGpa >= targetGpa,
+      isMathematicallyImpossible: currGpa < targetGpa,
+      requiredGpa: 0,
+      maxAchievableGpa: currGpa,
+      recommendationText: 'ကျန်ရှိသော Credit မရှိတော့ပါ။'
+    };
+  }
+
+  const totalFutureCredits = currentGpaCredits + remainingCredits;
+  const maxQualityPoints = currentQualityPoints + (remainingCredits * 4.00);
+  const maxAchievableGpa = Math.round((maxQualityPoints / totalFutureCredits) * 100) / 100;
+
+  const targetQualityPoints = targetGpa * totalFutureCredits;
+  const neededQualityPoints = targetQualityPoints - currentQualityPoints;
+  const requiredGpa = Math.round((neededQualityPoints / remainingCredits) * 100) / 100;
+
+  if (requiredGpa > 4.00) {
+    return {
+      isAchieved: false,
+      isMathematicallyImpossible: true,
+      requiredGpa,
+      maxAchievableGpa,
+      recommendationText: `ကျန်ရှိသော ${remainingCredits} credits အားလုံး A (4.00) ချည်း ရခဲ့လျှင်ပင် အမြင့်ဆုံး ${maxAchievableGpa.toFixed(2)} သာ ရရှိနိုင်သဖြင့် Target GPA ${targetGpa.toFixed(2)} သည် သင်္ချာနည်းအရ မဖြစ်နိုင်တော့ပါ။ Target ကို ပြန်လည်ညှိပေးပါ။`
+    };
+  }
+
+  if (requiredGpa <= (currentGpaCredits > 0 ? currentQualityPoints / currentGpaCredits : 0) && currentQualityPoints / currentGpaCredits >= targetGpa) {
+    return {
+      isAchieved: true,
+      isMathematicallyImpossible: false,
+      requiredGpa: Math.max(0, requiredGpa),
+      maxAchievableGpa,
+      recommendationText: `ဂုဏ်ယူပါသည်! သင်၏ လက်ရှိ CGPA သည် လိုချင်သော Target သို့ ရောက်ရှိနေပြီး ဖြစ်သည်။ ကျန်ရှိသော Course များတွင် GPA ${Math.max(2.0, requiredGpa).toFixed(2)} ခန့် ထိန်းထားရုံဖြင့် Target ကို ဆက်လက် ထိန်းသိမ်းနိုင်ပါမည်။`
+    };
+  }
+
+  return {
+    isAchieved: false,
+    isMathematicallyImpossible: false,
+    requiredGpa,
+    maxAchievableGpa,
+    recommendationText: `Target CGPA ${targetGpa.toFixed(2)} ရရှိရန် ကျန်ရှိသော ${remainingCredits} credit နာရီများတွင် အနည်းဆုံး ပျမ်းမျှ GPA ${requiredGpa.toFixed(2)} (${requiredGpa >= 3.67 ? 'A / A-' : requiredGpa >= 3.33 ? 'A- / B+' : 'B+ / B'} အများစု) ရရှိရန် လိုအပ်ပါသည်။`
+  };
+}
+
+// Auto-generates sequential term names from existing terms
+export function getNextTermName(existingTerms: TermRecord[]): string {
+  if (existingTerms.length === 0) return '2026 Term 2';
+  const last = existingTerms[existingTerms.length - 1].termName;
+  const match = last.match(/(\d{4})\s*Term\s*(\d)/i);
+  if (match) {
+    let year = parseInt(match[1], 10);
+    let termNum = parseInt(match[2], 10);
+    if (termNum >= 5) {
+      year += 1;
+      termNum = 1;
+    } else {
+      termNum += 1;
+    }
+    return `${year} Term ${termNum}`;
+  }
+  return `Term ${existingTerms.length + 1}`;
+}
+PART 2: UI WORKSPACE ENHANCEMENT (/src/components/CgpaCalculatorStudio.tsx)Replace the legacy interface with the upgraded 5-in-1 layout:TypeScriptimport React, { useState, useEffect } from 'react';
+import {
+  calculateCgpa,
+  calculateTargetScenario,
+  getNextTermName,
+  GRADE_POINTS,
+  UoPeopleGrade,
+  TermRecord,
+  CourseRecord
+} from '../utils/cgpaAnalytics';
+
+export const CgpaCalculatorStudio: React.FC = () => {
+  const [terms, setTerms] = useState<TermRecord[]>(() => {
+    const saved = localStorage.getItem('akari_cgpa_terms');
+    if (saved) {
+      try { return JSON.parse(saved); } catch {}
+    }
+    return [
+      {
+        id: 'term-1',
+        termName: '2026 Term 2',
+        courses: [
+          { id: 'c-1', code: 'HS 4990', credits: 3, grade: 'A' }
+        ]
+      }
+    ];
+  });
+
+  const [targetGpaInput, setTargetGpaInput] = useState('3.80');
+  const [remainingCreditsInput, setRemainingCreditsInput] = useState('30');
+  const [degreeTotalTarget, setDegreeTotalTarget] = useState<120 | 60>(120);
+  const [quickPasteText, setQuickPasteText] = useState('');
+  const [showPasteModal, setShowPasteModal] = useState(false);
+
+  useEffect(() => {
+    localStorage.setItem('akari_cgpa_terms', JSON.stringify(terms));
+  }, [terms]);
+
+  const summary = calculateCgpa(terms);
+  const targetAnalysis = calculateTargetScenario(
+    summary.totalQualityPoints,
+    summary.totalGpaCredits,
+    parseFloat(targetGpaInput) || 3.8,
+    parseInt(remainingCreditsInput, 10) || 0
+  );
+
+  // Term Operations
+  const handleAddNextTerm = () => {
+    const nextName = getNextTermName(terms);
+    setTerms([
+      ...terms,
+      {
+        id: `term-${Date.now()}`,
+        termName: nextName,
+        courses: [{ id: `c-${Date.now()}`, code: '', credits: 3, grade: 'A' }]
+      }
+    ]);
+  };
+
+  const handleRemoveTerm = (termId: string) => {
+    setTerms(terms.filter(t => t.id !== termId));
+  };
+
+  const handleAddCourse = (termId: string) => {
+    setTerms(terms.map(t => {
+      if (t.id !== termId) return t;
+      return {
+        ...t,
+        courses: [...t.courses, { id: `c-${Date.now()}`, code: '', credits: 3, grade: 'A' }]
+      };
+    }));
+  };
+
+  const handleRemoveCourse = (termId: string, courseId: string) => {
+    setTerms(terms.map(t => {
+      if (t.id !== termId) return t;
+      return { ...t, courses: t.courses.filter(c => c.id !== courseId) };
+    }));
+  };
+
+  const handleUpdateCourse = (termId: string, courseId: string, field: keyof CourseRecord, val: any) => {
+    setTerms(terms.map(t => {
+      if (t.id !== termId) return t;
+      return {
+        ...t,
+        courses: t.courses.map(c => c.id === courseId ? { ...c, [field]: val } : c)
+      };
+    }));
+  };
+
+  // Backup & Restore
+  const handleExportData = () => {
+    const blob = new Blob([JSON.stringify(terms, null, 2)], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `Akari_CGPA_Backup_${new Date().toISOString().split('T')[0]}.json`;
+    a.click();
+  };
+
+  const handleImportData = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = (event) => {
+      try {
+        const imported = JSON.parse(event.target?.result as string);
+        if (Array.isArray(imported)) {
+          setTerms(imported);
+        }
+      } catch {
+        alert('Invalid backup JSON file.');
+      }
+    };
+    reader.readAsText(file);
+  };
+
+  return (
+    <div className="space-y-6">
+      {/* Header & Backup Bar */}
+      <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
+        <div>
+          <h2 className="text-xl font-bold text-slate-100 flex items-center gap-2">
+            <span>🎓</span> Term အလိုက် CGPA တွက်ချက်ခြင်းနှင့် Target ခန့်မှန်းစနစ်
+          </h2>
+          <p className="text-xs text-slate-400 mt-0.5">
+            UoPeople စံနှုန်း Grade များ၊ Transfer Credits (TC)၊ Scholarship Safety နှင့် Honors ခန့်မှန်းချက်များ
+          </p>
+        </div>
+
+        {/* Action Controls */}
+        <div className="flex items-center gap-2 flex-wrap">
+          <button
+            onClick={() => setShowPasteModal(true)}
+            className="px-3 py-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 text-xs font-semibold flex items-center gap-1.5"
+          >
+            <span>📋</span> Portal Grade ကူးထည့်မည်
+          </button>
+          <button
+            onClick={handleExportData}
+            className="px-3 py-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 text-xs font-semibold flex items-center gap-1.5"
+          >
+            <span>💾</span> Backup
+          </button>
+          <label className="cursor-pointer px-3 py-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 text-xs font-semibold flex items-center gap-1.5">
+            <span>📥</span> Restore
+            <input type="file" accept=".json" onChange={handleImportData} className="hidden" />
+          </label>
+        </div>
+      </div>
+
+      {/* Top Analytics Cards */}
+      <div className="grid grid-cols-1 lg:grid-cols-12 gap-5">
+        {/* Left: Cumulative CGPA Card */}
+        <div className="lg:col-span-4 p-5 rounded-2xl bg-[#0c1222]/90 border border-slate-800 space-y-4">
+          <div className="flex items-center justify-between">
+            <span className="text-xs font-bold text-slate-300">စုစုပေါင်း CGPA</span>
+            <span className="px-2 py-0.5 rounded-full text-[10px] font-semibold bg-slate-800 text-slate-400 border border-slate-700">
+              {terms.length} Terms Recorded
+            </span>
+          </div>
+
+          <div className="flex items-baseline gap-2">
+            <span className="text-4xl font-extrabold text-white tracking-tight">
+              {summary.cumulativeGpa.toFixed(2)}
+            </span>
+            <span className="text-xs text-slate-400 font-semibold">/ 4.00 Max</span>
+          </div>
+
+          {/* Smart Badges: Scholarship & Honors */}
+          <div className="space-y-1.5 pt-1">
+            <div className={`px-2.5 py-1 rounded-xl text-xs font-semibold border flex items-center justify-between ${summary.scholarshipStatus.color}`}>
+              <span>{summary.scholarshipStatus.label}</span>
+            </div>
+            <div className={`px-2.5 py-1 rounded-xl text-xs font-semibold border flex items-center justify-between ${summary.honorsBadge.color}`}>
+              <span>{summary.honorsBadge.label}</span>
+            </div>
+          </div>
+
+          {/* Credits & Degree Progress Bar */}
+          <div className="pt-2 border-t border-slate-800 space-y-2">
+            <div className="flex justify-between text-xs text-slate-300">
+              <span>Earned Credits: <strong>{summary.totalEarnedCredits} hrs</strong></span>
+              <span className="text-slate-400">Target: {degreeTotalTarget} hrs</span>
+            </div>
+            <div className="w-full h-2 rounded-full bg-slate-800 overflow-hidden">
+              <div 
+                className="h-full bg-gradient-to-r from-indigo-500 to-cyan-400 rounded-full transition-all duration-500"
+                style={{ width: `${Math.min(100, (summary.totalEarnedCredits / degreeTotalTarget) * 100)}%` }}
+              />
+            </div>
+            <div className="flex justify-between text-[10px] text-slate-500">
+              <span>{((summary.totalEarnedCredits / degreeTotalTarget) * 100).toFixed(1)}% Completed</span>
+              <button 
+                onClick={() => setDegreeTotalTarget(degreeTotalTarget === 120 ? 60 : 120)}
+                className="hover:text-indigo-400 transition-colors"
+              >
+                Switch to {degreeTotalTarget === 120 ? 'Associate (60)' : 'Bachelor (120)'}
+              </button>
+            </div>
+          </div>
+        </div>
+
+        {/* Right: Target CGPA What-If Simulator Card */}
+        <div className="lg:col-span-8 p-5 rounded-2xl bg-[#0c1222]/90 border border-slate-800 space-y-4">
+          <div className="flex items-center justify-between flex-wrap gap-2">
+            <div className="flex items-center gap-2">
+              <span className="text-cyan-400">🎯</span>
+              <h3 className="text-xs font-bold text-slate-200 uppercase tracking-wide">
+                Target CGPA ရရှိရန် ကြိုတင်ခန့်မှန်းချက် (What-If Planner)
+              </h3>
+            </div>
+            <span className="text-[11px] text-slate-400">
+              Max Possible: <strong className="text-cyan-300">{targetAnalysis.maxAchievableGpa.toFixed(2)}</strong>
+            </span>
+          </div>
+
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            <div>
+              <label className="block text-[11px] font-semibold text-slate-400 mb-1">
+                လိုချင်သော Target CGPA (e.g. 3.80)
+              </label>
+              <input
+                type="number"
+                step="0.01"
+                min="0"
+                max="4"
+                value={targetGpaInput}
+                onChange={(e) => setTargetGpaInput(e.target.value)}
+                className="w-full px-3 py-2 text-xs rounded-xl bg-slate-900 border border-slate-700 text-slate-100 focus:outline-none focus:border-cyan-500"
+              />
+            </div>
+            <div>
+              <label className="block text-[11px] font-semibold text-slate-400 mb-1">
+                ကျန်ရှိသော Credit နာရီ စုစုပေါင်း (e.g. 30)
+              </label>
+              <input
+                type="number"
+                min="0"
+                value={remainingCreditsInput}
+                onChange={(e) => setRemainingCreditsInput(e.target.value)}
+                className="w-full px-3 py-2 text-xs rounded-xl bg-slate-900 border border-slate-700 text-slate-100 focus:outline-none focus:border-cyan-500"
+              />
+            </div>
+          </div>
+
+          {/* Scenario Recommendation Box */}
+          <div className={`p-3.5 rounded-xl border leading-relaxed text-xs ${
+            targetAnalysis.isMathematicallyImpossible
+              ? 'bg-rose-950/40 border-rose-500/40 text-rose-200'
+              : targetAnalysis.isAchieved
+                ? 'bg-emerald-950/40 border-emerald-500/40 text-emerald-200'
+                : 'bg-indigo-950/40 border-indigo-500/40 text-indigo-200'
+          }`}>
+            <p>{targetAnalysis.recommendationText}</p>
+          </div>
+        </div>
+      </div>
+
+      {/* Auto-Add Next Term Button Bar */}
+      <div className="flex items-center justify-between p-3 rounded-2xl bg-slate-900/60 border border-slate-800">
+        <span className="text-xs text-slate-400">
+          UoPeople Calendar စနစ်အတိုင်း Term များကို အစီအစဉ်လိုက် အလိုအလျောက် ဖြည့်သွင်းခြင်း:
+        </span>
+        <button
+          onClick={handleAddNextTerm}
+          className="px-4 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white font-bold text-xs flex items-center gap-1.5 shadow-md shadow-indigo-900/30 transition-all"
+        >
+          <span>+</span> နောက် Term အသစ်ထည့်မည် ({getNextTermName(terms)})
+        </button>
+      </div>
+
+      {/* Terms & Course Tables */}
+      <div className="space-y-4">
+        {terms.map((term) => {
+          // Calculate individual Term GPA
+          let termPts = 0;
+          let termGpaCreds = 0;
+          let termTotalCreds = 0;
+          term.courses.forEach(c => {
+            const p = GRADE_POINTS[c.grade];
+            if (p !== null) {
+              termPts += p * c.credits;
+              termGpaCreds += c.credits;
+              termTotalCreds += c.credits;
+            } else if (c.grade === 'TC') {
+              termTotalCreds += c.credits;
+            }
+          });
+          const termGpa = termGpaCreds > 0 ? (termPts / termGpaCreds).toFixed(2) : '0.00';
+
+          return (
+            <div key={term.id} className="p-4 rounded-2xl bg-[#0c1222]/90 border border-slate-800 space-y-3">
+              <div className="flex items-center justify-between flex-wrap gap-2 pb-2 border-b border-slate-800">
+                <input
+                  type="text"
+                  value={term.termName}
+                  onChange={(e) => {
+                    setTerms(terms.map(t => t.id === term.id ? { ...t, termName: e.target.value } : t));
+                  }}
+                  className="bg-transparent font-bold text-sm text-slate-100 focus:outline-none focus:border-b border-indigo-500"
+                />
+                <div className="flex items-center gap-3">
+                  <span className="text-xs text-slate-400">
+                    စုစုပေါင်း Credit: <strong className="text-slate-200">{termTotalCreds} hrs</strong>
+                  </span>
+                  <span className="px-2.5 py-0.5 rounded-full text-xs font-bold bg-indigo-950 text-indigo-300 border border-indigo-500/40">
+                    Term GPA: {termGpa}
+                  </span>
+                  <button
+                    onClick={() => handleRemoveTerm(term.id)}
+                    className="text-slate-500 hover:text-rose-400 text-xs transition-colors"
+                    title="Remove Term"
+                  >
+                    🗑️
+                  </button>
+                </div>
+              </div>
+
+              {/* Course Rows */}
+              <div className="space-y-2">
+                {term.courses.map(course => (
+                  <div key={course.id} className="flex items-center gap-2 flex-wrap sm:flex-nowrap">
+                    <input
+                      type="text"
+                      placeholder="ဘာသာရပ်အမည် / ကုဒ် (e.g. CS 1103)"
+                      value={course.code}
+                      onChange={(e) => handleUpdateCourse(term.id, course.id, 'code', e.target.value)}
+                      className="flex-1 min-w-[140px] px-3 py-1.5 text-xs rounded-xl bg-slate-900 border border-slate-700 text-slate-100 focus:outline-none focus:border-indigo-500"
+                    />
+                    <select
+                      value={course.credits}
+                      onChange={(e) => handleUpdateCourse(term.id, course.id, 'credits', parseInt(e.target.value, 10))}
+                      className="w-20 px-2 py-1.5 text-xs rounded-xl bg-slate-900 border border-slate-700 text-slate-100 focus:outline-none"
+                    >
+                      <option value={3}>3 hrs</option>
+                      <option value={4}>4 hrs</option>
+                      <option value={1}>1 hr</option>
+                      <option value={2}>2 hrs</option>
+                    </select>
+                    <select
+                      value={course.grade}
+                      onChange={(e) => handleUpdateCourse(term.id, course.id, 'grade', e.target.value as UoPeopleGrade)}
+                      className="w-28 px-2 py-1.5 text-xs rounded-xl bg-slate-900 border border-slate-700 text-slate-100 font-bold focus:outline-none"
+                    >
+                      <option value="A">A (4.00)</option>
+                      <option value="A-">A- (3.67)</option>
+                      <option value="B+">B+ (3.33)</option>
+                      <option value="B">B (3.00)</option>
+                      <option value="B-">B- (2.67)</option>
+                      <option value="C+">C+ (2.33)</option>
+                      <option value="C">C (2.00)</option>
+                      <option value="C-">C- (1.67)</option>
+                      <option value="D+">D+ (1.33)</option>
+                      <option value="D">D (1.00)</option>
+                      <option value="F">F (0.00)</option>
+                      <option value="TC">TC (Transfer)</option>
+                    </select>
+                    <button
+                      onClick={() => handleRemoveCourse(term.id, course.id)}
+                      className="p-1.5 text-slate-500 hover:text-rose-400 text-xs transition-colors"
+                    >
+                      ✕
+                    </button>
+                  </div>
+                ))}
+              </div>
+
+              {/* Add Course in Term Button */}
+              <button
+                onClick={() => handleAddCourse(term.id)}
+                className="mt-1 text-xs text-indigo-400 hover:text-indigo-300 font-semibold flex items-center gap-1"
+              >
+                <span>+</span> ဘာသာရပ် ထပ်ထည့်မည်
+              </button>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+};
+PART 3: VERIFICATION CRITERIATest Transfer Credit: Selecting TC must add the credits to totalEarnedCredits and degree completion bar while contributing 0 to GPA quality points and keeping CGPA accurate.   Test Honors & Scholarship Badges:Cumulative GPA >= 3.00 displays 🟢 Scholarship Safe.   Cumulative GPA < 3.00 displays ⚠️ Scholarship At Risk.Cumulative GPA >= 3.85 with >= 30 credits displays 🏆 Summa Cum Laude.   Test Auto-Add Next Term: Clicking the button increments from 2026 Term 2 to 2026 Term 3, 2026 Term 4, 2026 Term 5, and rolls over into 2027 Term 1 automatically.   Test Backup / Restore: Exporting generates an Akari_CGPA_Backup_*.json file; re-importing populates all terms without page reload.TypeScript compiles cleanly with zero type errors.Please apply these updates to /src/utils/cgpaAnalytics.ts and /src/components/CgpaCalculatorStudio.tsx now.

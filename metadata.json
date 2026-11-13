@@ -1,0 +1,6 @@
+{
+  "name": "Akari Scholar - Free Student Academic & Privacy Suite",
+  "description": "အခမဲ့၊ Data မသိမ်းဆည်းသော ကျောင်းသား All-in-One Academic Platform (CGPA တွက်ချက်ခြင်း၊ Assignment Rubric ခွဲခြမ်းစိတ်ဖြာမှု၊ APA 7th Word Export၊ Spaced Repetition Flashcards၊ Burnout ကာကွယ်ရေးနှင့် Pomodoro)",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

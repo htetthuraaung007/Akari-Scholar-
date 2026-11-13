@@ -1,0 +1,91 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <script>
+      (function() {
+        if (typeof window === 'undefined') return;
+        var RealWebSocket = window.WebSocket;
+        window.WebSocket = function(url, protocols) {
+          var isViteHmr = (Array.isArray(protocols) ? protocols.includes('vite-hmr') : protocols === 'vite-hmr') ||
+                          (typeof url === 'string' && (url.includes('token=') || url.includes('24678') || url.includes('vite-hmr')));
+          if (isViteHmr) {
+            var target = new EventTarget();
+            var mockWs = {
+              url: url,
+              readyState: 1,
+              CONNECTING: 0,
+              OPEN: 1,
+              CLOSING: 2,
+              CLOSED: 3,
+              send: function() {},
+              close: function() {
+                mockWs.readyState = 3;
+                target.dispatchEvent(new Event('close'));
+              },
+              addEventListener: target.addEventListener.bind(target),
+              removeEventListener: target.removeEventListener.bind(target),
+              dispatchEvent: target.dispatchEvent.bind(target),
+              onopen: null,
+              onclose: null,
+              onmessage: null,
+              onerror: null,
+            };
+            setTimeout(function() {
+              var ev = new Event('open');
+              if (typeof mockWs.onopen === 'function') mockWs.onopen(ev);
+              target.dispatchEvent(ev);
+            }, 0);
+            return mockWs;
+          }
+          return new RealWebSocket(url, protocols);
+        };
+        if (RealWebSocket) {
+          window.WebSocket.prototype = RealWebSocket.prototype;
+          window.WebSocket.CONNECTING = 0;
+          window.WebSocket.OPEN = 1;
+          window.WebSocket.CLOSING = 2;
+          window.WebSocket.CLOSED = 3;
+        }
+        var origConsoleError = console.error;
+        console.error = function() {
+          var args = Array.prototype.slice.call(arguments);
+          for (var i = 0; i < args.length; i++) {
+            var str = String(args[i]);
+            if (str.indexOf('WebSocket closed without opened') !== -1 || str.indexOf('failed to connect to websocket') !== -1) {
+              return;
+            }
+          }
+          origConsoleError.apply(console, args);
+        };
+        window.addEventListener('unhandledrejection', function(event) {
+          if (event && event.reason && (String(event.reason).indexOf('WebSocket') !== -1 || (event.reason.message && event.reason.message.indexOf('WebSocket') !== -1))) {
+            event.preventDefault();
+            event.stopPropagation();
+          }
+        });
+      })();
+    </script>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
+    <title>Students Support</title>
+    <meta name="description" content="Students Support - Free Student Academic & Privacy Suite (CGPA Forecaster, Assignment Rubric Blueprint, APA 7th Citations, Spaced Repetition Flashcards, and Burnout Prevention)" />
+    <meta property="og:title" content="Students Support" />
+    <meta property="og:description" content="Students Support - Free Student Academic & Privacy Suite (CGPA Forecaster, Assignment Rubric Blueprint, APA 7th Citations, Spaced Repetition Flashcards, and Burnout Prevention)" />
+    <meta property="og:type" content="website" />
+    <meta name="twitter:card" content="summary_large_image" />
+    <meta name="theme-color" content="#030712" />
+    <meta name="mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <meta name="apple-mobile-web-app-title" content="Students Support" />
+    <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
+    <link rel="icon" type="image/svg+xml" href="/icon.svg" />
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=Padauk:wght@400;700&display=swap" rel="stylesheet">
+  </head>
+  <body class="bg-slate-950 text-slate-100 antialiased selection:bg-indigo-500 selection:text-white">
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>
