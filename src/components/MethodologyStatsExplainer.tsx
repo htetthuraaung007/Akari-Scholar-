@@ -16,7 +16,7 @@ interface Tab2PersistedState {
   activeSubTab: 'burmese' | 'english';
 }
 
-const TAB2_STORAGE_KEY = 'matrix_tab2_data';
+const TAB2_STORAGE_KEY = 'matrix_tab2_data_v2';
 const TAB2_DEFAULT_STATE: Tab2PersistedState = {
   sourceText: '',
   inputUrl: '',

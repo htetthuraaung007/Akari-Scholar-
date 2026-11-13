@@ -39,11 +39,11 @@ import {
   RefreshCw,
 } from 'lucide-react';
 
-const SOP_ACTIVE_TAB_KEY = 'sop_active_tab';
-const SOP_TAB1_SESSION_KEY = 'sop_tab1_state';
-const SOP_TAB2_SESSION_KEY = 'sop_tab2_state';
-const SOP_TAB4_SESSION_KEY = 'sop_tab4_state';
-const LEGACY_SCHOLARSHIP_PERSISTENCE_KEY = 'akari_scholarship_reviewer_state_v2';
+const SOP_ACTIVE_TAB_KEY = 'sop_active_tab_v2';
+const SOP_TAB1_SESSION_KEY = 'sop_tab1_state_v2';
+const SOP_TAB2_SESSION_KEY = 'sop_tab2_state_v2';
+const SOP_TAB4_SESSION_KEY = 'sop_tab4_state_v2';
+const LEGACY_SCHOLARSHIP_PERSISTENCE_KEY = 'akari_scholarship_reviewer_state_v3';
 
 type ScholarshipActiveTab = 'new_app' | 'renewal_app' | 'pa_email' | 'intl_evaluator';
 
@@ -105,9 +105,8 @@ const DEFAULT_TAB1_STATE: ScholarshipFormState = {
   newPrompt: '',
   newAngle: 'currency_inflation',
   customStoryAngle: '',
-  newDegree: 'Bachelor of Science in Computer Science',
-  newCareerGoals:
-    'To work in technology and provide free digital literacy workshops to underserved youth in my community.',
+  newDegree: '',
+  newCareerGoals: '',
   newEssayResult: '',
   aiNewTemplates: [],
   aiNewTemplatesSignature: '',
@@ -117,18 +116,17 @@ const DEFAULT_TAB2_STATE: RenewalFormState = {
   renewalPrompt: '',
   renewalAngle: 'academic_high_achiever',
   customStoryAngle: '',
-  renewalCgpa: '3.65',
-  renewalCoursesDone: '8 courses completed (24 credits earned)',
-  renewalDegree: 'Bachelor of Science in Computer Science',
-  renewalCareerGoals:
-    'Maintain high GPA, complete degree without pause, and secure industry software internship.',
+  renewalCgpa: '',
+  renewalCoursesDone: '',
+  renewalDegree: '',
+  renewalCareerGoals: '',
   renewalEssayResult: '',
   aiRenewalTemplates: [],
   aiRenewalTemplatesSignature: '',
 };
 
 const DEFAULT_TAB4_STATE: RubricScorecard = {
-  evalScholarshipTarget: 'UoPeople Assessment Fee Scholarship & Global University Standards',
+  evalScholarshipTarget: '',
   evalEssayInput: '',
   evalResult: '',
   customStoryAngle: '',

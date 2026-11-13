@@ -26,7 +26,7 @@ interface AdvisorEmailSuiteProps {
   language: 'my' | 'en';
 }
 
-const ADVISOR_EMAIL_SESSION_KEY = 'sop_tab3_state';
+const ADVISOR_EMAIL_SESSION_KEY = 'sop_tab3_state_v2';
 
 export interface AdvisorEmailState {
   studentName: string;
@@ -41,23 +41,18 @@ export interface AdvisorEmailState {
 }
 
 function getInitialAdvisorState(): AdvisorEmailState {
-  const existingSession =
-    typeof window !== 'undefined' ? window.sessionStorage.getItem(ADVISOR_EMAIL_SESSION_KEY) : null;
-
   const defaultStudentName =
-    (typeof window !== 'undefined' && localStorage.getItem('akari_pa_studentName')) || 'Student Name';
+    (typeof window !== 'undefined' && localStorage.getItem('akari_pa_studentName_v2')) || '';
   const defaultStudentId =
-    (typeof window !== 'undefined' && localStorage.getItem('akari_pa_studentId')) || 's123456';
+    (typeof window !== 'undefined' && localStorage.getItem('akari_pa_studentId_v2')) || '';
   const defaultCgpa =
-    (typeof window !== 'undefined' && localStorage.getItem('akari_pa_cgpa')) || '3.65';
+    (typeof window !== 'undefined' && localStorage.getItem('akari_pa_cgpa_v2')) || '';
   const defaultDegree =
-    (typeof window !== 'undefined' && localStorage.getItem('akari_pa_degree')) ||
-    'Bachelor of Science in Computer Science';
+    (typeof window !== 'undefined' && localStorage.getItem('akari_pa_degree_v2')) || '';
   const defaultScope =
-    (typeof window !== 'undefined' && localStorage.getItem('akari_pa_scholarshipScope')) ||
-    'လာမည့် Term များအတွက် Assessment Fee Scholarship လျှောက်ထားလိုခြင်း';
+    (typeof window !== 'undefined' && localStorage.getItem('akari_pa_scholarshipScope_v2')) || '';
   const defaultUrgent =
-    (typeof window !== 'undefined' && localStorage.getItem('akari_pa_urgentNote')) || '';
+    (typeof window !== 'undefined' && localStorage.getItem('akari_pa_urgentNote_v2')) || '';
 
   const fallback: AdvisorEmailState = {
     studentName: defaultStudentName,
@@ -71,32 +66,13 @@ function getInitialAdvisorState(): AdvisorEmailState {
     hasCleared: false,
   };
 
-  const persisted = loadPersistedTabState<AdvisorEmailState>(ADVISOR_EMAIL_SESSION_KEY, fallback);
-  if (persisted.hasCleared) {
-    return persisted;
-  }
-
-  if (!existingSession && !persisted.paEmailResult) {
-    persisted.paEmailResult = generateAdvisorEmail({
-      advisorName: 'Program Advisor',
-      studentName: persisted.studentName || 'Student Name',
-      studentId: persisted.studentId || 's123456',
-      degreeProgram: persisted.paDegree || 'Bachelor of Science in Computer Science',
-      cgpa: persisted.paCgpa || '3.65',
-      scholarshipScope: persisted.scholarshipScope,
-      customNotesPrompt: persisted.urgentNote,
-      seed: Date.now(),
-      variation: 1,
-    });
-  }
-
-  return persisted;
+  return loadPersistedTabState<AdvisorEmailState>(ADVISOR_EMAIL_SESSION_KEY, fallback);
 }
 
 export const AdvisorEmailSuite: React.FC<AdvisorEmailSuiteProps> = () => {
   const initialState = getInitialAdvisorState();
 
-  // Zero-Loss State Persistence across sub-tab switching (`sop_tab3_state`)
+  // Zero-Loss State Persistence across sub-tab switching (`sop_tab3_state_v2`)
   const [studentName, setStudentName] = useState(initialState.studentName);
   const [studentId, setStudentId] = useState(initialState.studentId);
   const [paCgpa, setPaCgpa] = useState(initialState.paCgpa);
@@ -123,15 +99,15 @@ export const AdvisorEmailSuite: React.FC<AdvisorEmailSuiteProps> = () => {
     void resolveDynamicModelCatalog();
   }, []);
 
-  // Sync inputs and generated output to sessionStorage (`sop_tab3_state`) & localStorage
+  // Sync inputs and generated output to sessionStorage (`sop_tab3_state_v2`) & localStorage
   useEffect(() => {
     if (typeof window !== 'undefined') {
-      localStorage.setItem('akari_pa_studentName', studentName);
-      localStorage.setItem('akari_pa_studentId', studentId);
-      localStorage.setItem('akari_pa_cgpa', paCgpa);
-      localStorage.setItem('akari_pa_degree', paDegree);
-      localStorage.setItem('akari_pa_scholarshipScope', scholarshipScope);
-      localStorage.setItem('akari_pa_urgentNote', urgentNote);
+      localStorage.setItem('akari_pa_studentName_v2', studentName);
+      localStorage.setItem('akari_pa_studentId_v2', studentId);
+      localStorage.setItem('akari_pa_cgpa_v2', paCgpa);
+      localStorage.setItem('akari_pa_degree_v2', paDegree);
+      localStorage.setItem('akari_pa_scholarshipScope_v2', scholarshipScope);
+      localStorage.setItem('akari_pa_urgentNote_v2', urgentNote);
     }
     savePersistedTabState<AdvisorEmailState>(ADVISOR_EMAIL_SESSION_KEY, {
       studentName,

@@ -26,7 +26,7 @@ interface Tab4PersistedState {
   pastFileStats: IngestionStats | null;
 }
 
-const TAB4_STORAGE_KEY = 'matrix_tab4_data';
+const TAB4_STORAGE_KEY = 'matrix_tab4_data_v2';
 const TAB4_DEFAULT_STATE: Tab4PersistedState = {
   currentTopic: '',
   currentNotes: '',

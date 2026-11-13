@@ -58,6 +58,10 @@ export const DashboardStreakWidget: React.FC = () => {
                   ? language === 'my'
                     ? '✅ ယနေ့အတွက် စာလေ့လာမှု ပြီးမြောက်ပါပြီ! မနက်ဖြန်လည်း ဆက်ထိန်းထားကြစို့။'
                     : '✅ Today’s study goal achieved! Keep the momentum going.'
+                  : streak.currentStreak === 0
+                  ? language === 'my'
+                    ? '⚡ စာစတင်လေ့လာရန် Pomodoro၊ Flashcards သို့မဟုတ် Research ကိရိယာတစ်ခုခုကို အသုံးပြုပါ။'
+                    : '⚡ Complete a Pomodoro, Flashcard session, or Research query today to begin your streak.'
                   : language === 'my'
                   ? '⚡ ယနေ့ စာလေ့လာမှုအတွက် Pomodoro, Flashcards သို့မဟုတ် Research ကို အသုံးပြုပါ။'
                   : '⚡ Complete a Pomodoro, Flashcard session, or Research query today to maintain your streak.'}

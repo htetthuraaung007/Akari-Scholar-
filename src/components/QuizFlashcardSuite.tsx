@@ -78,8 +78,8 @@ import {
 } from 'lucide-react';
 import confetti from 'canvas-confetti';
 
-const STORAGE_KEY = 'akari_scholar_quizzes_v1';
-const SUITE_PERSISTENCE_KEY = 'akari_quiz_flashcard_suite_state_v1';
+const STORAGE_KEY = 'akari_scholar_quizzes_v2';
+const SUITE_PERSISTENCE_KEY = 'akari_quiz_flashcard_suite_state_v2';
 
 interface RawGeneratedQuizItem {
   id?: string;
@@ -113,7 +113,7 @@ interface PersistedSuiteState {
   currentSessionId: string | null;
   currentAttemptNumber: number;
   quizElapsedSeconds: number;
-  deckFilter: 'due' | 'error' | 'all';
+  deckFilter: 'due' | 'error' | 'all' | null;
   currentCardIndex: number;
   fcSourceInput: string;
   fcTextPayload: string;
@@ -173,7 +173,7 @@ export const QuizFlashcardSuite: React.FC = () => {
       currentSessionId: null,
       currentAttemptNumber: 1,
       quizElapsedSeconds: 0,
-      deckFilter: 'due',
+      deckFilter: null,
       currentCardIndex: 0,
       fcSourceInput: '',
       fcTextPayload: '',
@@ -259,7 +259,9 @@ export const QuizFlashcardSuite: React.FC = () => {
   const [flashcardDeck, setFlashcardDeck] = useState<FlashcardItem[]>(() =>
     loadFlashcardDeck(appContextFlashcards)
   );
-  const [deckFilter, setDeckFilter] = useState<'due' | 'error' | 'all'>(initialPersisted.deckFilter);
+  const [deckFilter, setDeckFilter] = useState<'due' | 'error' | 'all' | null>(
+    initialPersisted.deckFilter
+  );
   const [currentCardIndex, setCurrentCardIndex] = useState(initialPersisted.currentCardIndex);
   const [isFlipped, setIsFlipped] = useState(false);
 
@@ -299,7 +301,9 @@ export const QuizFlashcardSuite: React.FC = () => {
   const masteredPercentage = totalCards > 0 ? Math.round((masteredCardsCount / totalCards) * 100) : 0;
 
   const activeStudyList =
-    deckFilter === 'due'
+    deckFilter === null
+      ? []
+      : deckFilter === 'due'
       ? dueCardsList
       : deckFilter === 'error'
       ? errorCardsList
@@ -2147,7 +2151,21 @@ ${scopedMergedContent}
           </div>
 
           {/* Zero Due State or Active 3D Flashcard Reviewer */}
-          {deckFilter === 'due' && dueCardsCount === 0 ? (
+          {totalCards === 0 || deckFilter === null ? (
+            <div className="p-12 rounded-3xl bg-slate-900/60 border border-slate-800 text-center text-slate-400 space-y-3 max-w-xl mx-auto">
+              <Layers className="w-12 h-12 text-slate-600 mx-auto" />
+              <h3 className="text-base font-bold text-white">
+                {totalCards === 0
+                  ? 'လေ့ကျင့်ရန် Flashcard Deck မရှိသေးပါ'
+                  : 'လေ့ကျင့်လိုသော Flashcard Deck ကဏ္ဍကို ရွေးချယ်ပါ'}
+              </h3>
+              <p className="text-xs max-w-sm mx-auto leading-relaxed">
+                {totalCards === 0
+                  ? 'အထက်ပါ [✨ စာအုပ်/စာတမ်းမှ Flashcard အသစ် ၂၀-၃၀ ကတ် တိုက်ရိုက်ထုတ်မည်] သို့မဟုတ် [+ Manual Card] ခလုတ်ဖြင့် စတင်ထုတ်ယူပါ။'
+                  : 'အထက်ပါ Due Today၊ Quiz Error Deck သို့မဟုတ် All Cards ခလုတ်တစ်ခုခုကို နှိပ်၍ စတင်လေ့ကျင့်ပါ။'}
+              </p>
+            </div>
+          ) : deckFilter === 'due' && dueCardsCount === 0 ? (
             <div className="p-12 rounded-3xl bg-slate-900/70 border border-emerald-500/30 text-center space-y-4 shadow-2xl max-w-2xl mx-auto">
               <div className="w-16 h-16 rounded-2xl bg-emerald-500/15 border border-emerald-500/30 text-emerald-400 flex items-center justify-center mx-auto">
                 <CheckCircle2 className="w-9 h-9" />

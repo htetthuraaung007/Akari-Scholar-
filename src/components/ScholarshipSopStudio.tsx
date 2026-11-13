@@ -23,35 +23,35 @@ interface StarCvTabState {
   result: GeneratedEssayResult | null;
 }
 
-const STAR_ACTIVE_TAB_KEY = 'star_studio_active_tab';
-const STAR_SOP_SESSION_KEY = 'star_studio_sop_state';
-const STAR_LEADERSHIP_SESSION_KEY = 'star_studio_star_state';
-const STAR_PERSONAL_SESSION_KEY = 'star_studio_personal_state';
-const STAR_CV_SESSION_KEY = 'star_studio_cv_state';
+const STAR_ACTIVE_TAB_KEY = 'star_studio_active_tab_v2';
+const STAR_SOP_SESSION_KEY = 'star_studio_sop_state_v2';
+const STAR_LEADERSHIP_SESSION_KEY = 'star_studio_star_state_v2';
+const STAR_PERSONAL_SESSION_KEY = 'star_studio_personal_state_v2';
+const STAR_CV_SESSION_KEY = 'star_studio_cv_state_v2';
 
 const DEFAULT_SOP_STATE: StarEssayTabState = {
-  targetProgram: 'Chulalongkorn University - Master of Public Health (MPH) Scholarship',
+  targetProgram: '',
   promptNarrative: '',
   wordLimit: '500',
   result: null,
 };
 
 const DEFAULT_STAR_STATE: StarEssayTabState = {
-  targetProgram: 'Chulalongkorn University - Master of Public Health (MPH) Scholarship',
+  targetProgram: '',
   promptNarrative: '',
   wordLimit: '500',
   result: null,
 };
 
 const DEFAULT_PERSONAL_STATE: StarEssayTabState = {
-  targetProgram: 'Chulalongkorn University - Master of Public Health (MPH) Scholarship',
+  targetProgram: '',
   promptNarrative: '',
   wordLimit: '500',
   result: null,
 };
 
 const DEFAULT_CV_STATE: StarCvTabState = {
-  targetRoleOrDegree: 'Master of Public Health (MPH) / Graduate Research Assistant',
+  targetRoleOrDegree: '',
   rawCvProfile: '',
   result: null,
 };

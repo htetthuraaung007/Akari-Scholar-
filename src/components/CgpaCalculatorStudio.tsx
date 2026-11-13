@@ -39,9 +39,7 @@ function loadInitialCgpaTerms(): TermRecord[] {
   if (typeof window === 'undefined') {
     return [];
   }
-  const primary = localStorage.getItem(CGPA_HISTORY_STORAGE_KEY);
-  const legacy = localStorage.getItem(LEGACY_CGPA_STORAGE_KEY);
-  const raw = primary || legacy;
+  const raw = localStorage.getItem(CGPA_HISTORY_STORAGE_KEY);
   if (raw) {
     try {
       const parsed = JSON.parse(raw);
@@ -52,28 +50,7 @@ function loadInitialCgpaTerms(): TermRecord[] {
       // Ignore malformed storage
     }
   }
-  return [
-    enrichTermWithCalendarMetadata({
-      id: 'term-1',
-      termName: '2026 Term 2',
-      courses: [
-        {
-          id: 'c-1',
-          code: 'CS 1103',
-          courseName: 'Programming 2',
-          credits: 3,
-          grade: 'A',
-        },
-        {
-          id: 'c-2',
-          code: 'MATH 1201',
-          courseName: 'College Algebra',
-          credits: 3,
-          grade: 'A-',
-        },
-      ],
-    }),
-  ];
+  return [];
 }
 
 const OFFICIAL_TERM_PRESETS = buildOfficialTermPresets();
@@ -81,11 +58,8 @@ const OFFICIAL_TERM_PRESETS = buildOfficialTermPresets();
 export const CgpaCalculatorStudio: React.FC = () => {
   const [terms, setTerms] = useState<TermRecord[]>(loadInitialCgpaTerms);
   const [degreeTotalTarget, setDegreeTotalTarget] = useState<120 | 60>(120);
-  const [targetGpaInput, setTargetGpaInput] = useState('3.80');
-  const [remainingCreditsInput, setRemainingCreditsInput] = useState(() => {
-    const initialSummary = calculateCgpa(loadInitialCgpaTerms());
-    return String(Math.max(0, 120 - initialSummary.totalEarnedCredits));
-  });
+  const [targetGpaInput, setTargetGpaInput] = useState('');
+  const [remainingCreditsInput, setRemainingCreditsInput] = useState('');
   const [isRemainingManual, setIsRemainingManual] = useState(false);
 
   // Modals & Interactive States
@@ -141,17 +115,23 @@ export const CgpaCalculatorStudio: React.FC = () => {
 
   const summary = calculateCgpa(terms);
 
-  // Keep WHAT-IF Planner remaining credits synced with Earned Credits unless manually locked
+  // Keep WHAT-IF Planner remaining credits synced with Earned Credits when terms exist unless manually edited
   useEffect(() => {
-    if (!isRemainingManual) {
+    if (!isRemainingManual && summary.totalEarnedCredits > 0) {
       setRemainingCreditsInput(String(Math.max(0, degreeTotalTarget - summary.totalEarnedCredits)));
     }
   }, [summary.totalEarnedCredits, degreeTotalTarget, isRemainingManual]);
 
+  const hasWhatIfInputs =
+    targetGpaInput.trim() !== '' &&
+    remainingCreditsInput.trim() !== '' &&
+    (parseFloat(targetGpaInput) || 0) > 0 &&
+    (parseInt(remainingCreditsInput, 10) || 0) > 0;
+
   const targetAnalysis = calculateTargetScenario(
     summary.totalQualityPoints,
     summary.totalGpaCredits,
-    parseFloat(targetGpaInput) || 3.8,
+    parseFloat(targetGpaInput) || 0,
     parseInt(remainingCreditsInput, 10) || 0
   );
 
@@ -611,7 +591,7 @@ export const CgpaCalculatorStudio: React.FC = () => {
             <span className="text-xs text-slate-400 font-mono">
               Max Possible:{' '}
               <strong className="text-cyan-300 font-bold">
-                {targetAnalysis.maxAchievableGpa.toFixed(2)}
+                {hasWhatIfInputs ? targetAnalysis.maxAchievableGpa.toFixed(2) : '—'}
               </strong>
             </span>
           </div>
@@ -626,9 +606,10 @@ export const CgpaCalculatorStudio: React.FC = () => {
                 step="0.01"
                 min="0"
                 max="4"
+                placeholder="e.g. 3.80"
                 value={targetGpaInput}
                 onChange={(e) => setTargetGpaInput(e.target.value)}
-                className="w-full px-3.5 py-2.5 text-xs sm:text-sm rounded-xl bg-slate-950 border border-slate-700 text-slate-100 font-mono font-bold focus:outline-none focus:border-cyan-500"
+                className="w-full px-3.5 py-2.5 text-xs sm:text-sm rounded-xl bg-slate-950 border border-slate-700 text-slate-100 placeholder-slate-500 font-mono font-bold focus:outline-none focus:border-cyan-500"
               />
             </div>
             <div>
@@ -639,7 +620,12 @@ export const CgpaCalculatorStudio: React.FC = () => {
                 {isRemainingManual && (
                   <button
                     type="button"
-                    onClick={() => setIsRemainingManual(false)}
+                    onClick={() => {
+                      setIsRemainingManual(false);
+                      setRemainingCreditsInput(
+                        String(Math.max(0, degreeTotalTarget - summary.totalEarnedCredits))
+                      );
+                    }}
                     className="text-[10px] text-cyan-400 hover:underline font-semibold cursor-pointer"
                   >
                     Auto-sync ({Math.max(0, degreeTotalTarget - summary.totalEarnedCredits)} hrs)
@@ -649,28 +635,37 @@ export const CgpaCalculatorStudio: React.FC = () => {
               <input
                 type="number"
                 min="0"
+                placeholder="e.g. 120"
                 value={remainingCreditsInput}
                 onChange={(e) => {
                   setIsRemainingManual(true);
                   setRemainingCreditsInput(e.target.value);
                 }}
-                className="w-full px-3.5 py-2.5 text-xs sm:text-sm rounded-xl bg-slate-950 border border-slate-700 text-slate-100 font-mono font-bold focus:outline-none focus:border-cyan-500"
+                className="w-full px-3.5 py-2.5 text-xs sm:text-sm rounded-xl bg-slate-950 border border-slate-700 text-slate-100 placeholder-slate-500 font-mono font-bold focus:outline-none focus:border-cyan-500"
               />
             </div>
           </div>
 
           {/* Scenario Recommendation Box */}
-          <div
-            className={`p-4 rounded-2xl border leading-relaxed text-xs sm:text-sm shadow-inner ${
-              targetAnalysis.isMathematicallyImpossible
-                ? 'bg-rose-950/40 border-rose-500/40 text-rose-200'
-                : targetAnalysis.isAchieved
-                ? 'bg-emerald-950/40 border-emerald-500/40 text-emerald-200'
-                : 'bg-indigo-950/40 border-indigo-500/40 text-indigo-200'
-            }`}
-          >
-            <p className="font-medium">{targetAnalysis.recommendationText}</p>
-          </div>
+          {hasWhatIfInputs ? (
+            <div
+              className={`p-4 rounded-2xl border leading-relaxed text-xs sm:text-sm shadow-inner ${
+                targetAnalysis.isMathematicallyImpossible
+                  ? 'bg-rose-950/40 border-rose-500/40 text-rose-200'
+                  : targetAnalysis.isAchieved
+                  ? 'bg-emerald-950/40 border-emerald-500/40 text-emerald-200'
+                  : 'bg-indigo-950/40 border-indigo-500/40 text-indigo-200'
+              }`}
+            >
+              <p className="font-medium">{targetAnalysis.recommendationText}</p>
+            </div>
+          ) : (
+            <div className="p-4 rounded-2xl border border-slate-800 bg-slate-950/60 leading-relaxed text-xs sm:text-sm text-slate-400 shadow-inner">
+              <p className="font-medium">
+                လိုချင်သော Target CGPA နှင့် ကျန်ရှိသော Credit နာရီများကို ရိုက်ထည့်၍ လိုအပ်သည့် အနည်းဆုံး ပျမ်းမျှ GPA ကို တွက်ချက်ကြည့်ရှုပါ။
+              </p>
+            </div>
+          )}
         </div>
       </div>
 

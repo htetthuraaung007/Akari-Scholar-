@@ -119,7 +119,7 @@ interface LessonPersistedState {
   generatedFlashcards: GeneratedFlashcardItem[];
 }
 
-const LESSON_STORAGE_KEY = 'lesson_explainer_workspace_v1';
+const LESSON_STORAGE_KEY = 'lesson_explainer_workspace_v2';
 const LESSON_DEFAULT_STATE: LessonPersistedState = {
   lessonContent: '',
   attachedDocument: null,

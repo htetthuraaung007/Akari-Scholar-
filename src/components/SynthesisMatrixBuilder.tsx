@@ -17,7 +17,7 @@ interface Tab3PersistedState {
   synthesisResult: CompleteSynthesisResult | null;
 }
 
-const TAB3_STORAGE_KEY = 'matrix_tab3_data';
+const TAB3_STORAGE_KEY = 'matrix_tab3_data_v2';
 const TAB3_DEFAULT_STATE: Tab3PersistedState = {
   inputUrl: '',
   ingestedPapers: [],

@@ -60,8 +60,8 @@ import {
   type DailyRecoveryProtocol,
 } from '../services/geminiService';
 
-const DAILY_ENERGY_STATE_KEY = 'daily_energy_check_state';
-const DAILY_RECOVERY_RESULT_KEY = 'daily_recovery_protocol_result';
+const DAILY_ENERGY_STATE_KEY = 'daily_energy_check_state_v2';
+const DAILY_RECOVERY_RESULT_KEY = 'daily_recovery_protocol_result_v2';
 
 interface DailyEnergyCheckState {
   energyLevel: number;
@@ -179,19 +179,23 @@ export const BurnoutPomodoro: React.FC = () => {
 
   const [studyHours, setStudyHours] = useState<number>(() => {
     if (initialSavedEnergy.current) return initialSavedEnergy.current.studyHours;
-    return burnoutLog.studyHoursToday !== undefined ? burnoutLog.studyHoursToday : 3.5;
+    return burnoutLog.lastUpdated && burnoutLog.studyHoursToday !== undefined
+      ? burnoutLog.studyHoursToday
+      : 0;
   });
   const [sleepHours, setSleepHours] = useState<number>(() => {
     if (initialSavedEnergy.current) return initialSavedEnergy.current.sleepHours;
-    return burnoutLog.sleepHours !== undefined ? burnoutLog.sleepHours : 7.0;
+    return burnoutLog.lastUpdated && burnoutLog.sleepHours !== undefined
+      ? burnoutLog.sleepHours
+      : 0;
   });
   const [deadlinePressure, setDeadlinePressure] = useState<'low' | 'medium' | 'high'>(() => {
     if (initialSavedEnergy.current) return initialSavedEnergy.current.deadlinePressure;
-    return burnoutLog.deadlinePressure || 'medium';
+    return burnoutLog.deadlinePressure || 'low';
   });
   const [symptoms, setSymptoms] = useState<string[]>(() => {
     if (initialSavedEnergy.current) return initialSavedEnergy.current.symptoms;
-    return burnoutLog.symptoms || ['eyeStrain'];
+    return burnoutLog.symptoms || [];
   });
   const [savedEnergySnapshot, setSavedEnergySnapshot] = useState<DailyEnergyCheckState | null>(
     () => initialSavedEnergy.current
@@ -219,13 +223,30 @@ export const BurnoutPomodoro: React.FC = () => {
   // Derived objectively from sleep debt, study duration, deadlines, & physical symptoms
   // =========================================================================
   const calculateMetrics = () => {
+    const isFreshZeroState =
+      studyHours === 0 &&
+      sleepHours === 0 &&
+      symptoms.length === 0 &&
+      deadlinePressure === 'low' &&
+      !savedEnergySnapshot;
+
+    if (isFreshZeroState) {
+      return {
+        energy: 10.0,
+        stress: 0.0,
+        stage: 'optimal' as const,
+        energyFactors: [] as string[],
+        stressFactors: [] as string[],
+      };
+    }
+
     // 1. Energy Calculation (Base 10.0, deductions for biological debt)
     let calcEnergy = 10.0;
     const energyFactors: string[] = [];
 
-    // Sleep deficit
-    if (sleepHours >= 8) {
-      // optimal sleep
+    // Sleep deficit (only deduct when user enters a positive sleep duration < 8h)
+    if (sleepHours === 0 || sleepHours >= 8) {
+      // optimal sleep or unset baseline
     } else if (sleepHours >= 7) {
       calcEnergy -= 1.0;
       energyFactors.push(language === 'my' ? 'အိပ်ချိန် ၇ နာရီ (-1.0)' : 'Sleep 7h (-1.0)');
@@ -291,10 +312,10 @@ export const BurnoutPomodoro: React.FC = () => {
     }
 
     // Sleep deficit impact on stress
-    if (sleepHours < 5) {
+    if (sleepHours > 0 && sleepHours < 5) {
       calcStress += 2.5;
       stressFactors.push(language === 'my' ? 'အိပ်ရေးပျက် Cortisol မြင့်တက်မှု (+2.5)' : 'Sleep Debt Cortisol Surge (+2.5)');
-    } else if (sleepHours < 6) {
+    } else if (sleepHours > 0 && sleepHours < 6) {
       calcStress += 1.5;
       stressFactors.push(language === 'my' ? 'အိပ်ရေးမလောက်မှု (+1.5)' : 'Sleep Deficit (+1.5)');
     }
@@ -862,7 +883,7 @@ export const BurnoutPomodoro: React.FC = () => {
                 }`}
               >
                 {calculated.stage === 'optimal'
-                  ? (language === 'my' ? '● Healthy Energy' : '● Healthy Energy')
+                  ? (language === 'my' ? '● Normal / Fresh' : '● Normal / Fresh')
                   : calculated.stage === 'moderate'
                   ? (language === 'my' ? '▲ Caution' : '▲ Caution')
                   : calculated.stage === 'fatigue'
@@ -966,9 +987,10 @@ export const BurnoutPomodoro: React.FC = () => {
                     step="0.5"
                     min="0"
                     max="18"
-                    value={studyHours}
-                    onChange={(e) => setStudyHours(Number(e.target.value))}
-                    className="w-full px-3 py-1.5 text-xs bg-slate-950 border border-slate-700 rounded-lg text-white font-mono focus:outline-none focus:border-amber-500"
+                    placeholder="0"
+                    value={studyHours === 0 && !savedEnergySnapshot ? '' : studyHours}
+                    onChange={(e) => setStudyHours(e.target.value === '' ? 0 : Number(e.target.value))}
+                    className="w-full px-3 py-1.5 text-xs bg-slate-950 border border-slate-700 rounded-lg text-white font-mono placeholder-slate-500 focus:outline-none focus:border-amber-500"
                   />
                 </div>
                 <div>
@@ -981,9 +1003,10 @@ export const BurnoutPomodoro: React.FC = () => {
                     step="0.5"
                     min="0"
                     max="14"
-                    value={sleepHours}
-                    onChange={(e) => setSleepHours(Number(e.target.value))}
-                    className="w-full px-3 py-1.5 text-xs bg-slate-950 border border-slate-700 rounded-lg text-white font-mono focus:outline-none focus:border-cyan-500"
+                    placeholder="0"
+                    value={sleepHours === 0 && !savedEnergySnapshot ? '' : sleepHours}
+                    onChange={(e) => setSleepHours(e.target.value === '' ? 0 : Number(e.target.value))}
+                    className="w-full px-3 py-1.5 text-xs bg-slate-950 border border-slate-700 rounded-lg text-white font-mono placeholder-slate-500 focus:outline-none focus:border-cyan-500"
                   />
                 </div>
               </div>

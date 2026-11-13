@@ -13,7 +13,7 @@ interface PersistedWellnessState {
   anxietyAdvice: string;
 }
 
-const WELLNESS_STATE_STORAGE_KEY = 'akari_wellness_coach_state_v1';
+const WELLNESS_STATE_STORAGE_KEY = 'akari_wellness_coach_state_v2';
 let activeWellnessInFlight = false;
 
 function loadPersistedWellnessState(): PersistedWellnessState {
@@ -331,7 +331,7 @@ export const WellnessCoach: React.FC<WellnessCoachProps> = ({ language = 'my' })
           </div>
         )}
 
-        {anxietyAdvice && (
+        {anxietyAdvice ? (
           <div className="p-5 rounded-2xl bg-slate-950/90 border border-indigo-500/30 space-y-3 animate-in fade-in">
             <div className="flex items-center justify-between gap-2">
               <div className="flex items-center space-x-2 text-indigo-400 text-xs font-bold uppercase tracking-wider">
@@ -355,6 +355,12 @@ export const WellnessCoach: React.FC<WellnessCoachProps> = ({ language = 'my' })
             <div className="text-xs sm:text-sm text-slate-200 leading-relaxed whitespace-pre-line">
               {anxietyAdvice}
             </div>
+          </div>
+        ) : (
+          <div className="p-4 rounded-2xl bg-slate-950/60 border border-slate-800/80 text-center text-xs text-slate-400">
+            {language === 'my'
+              ? 'ရင်ဆိုင်နေရသော အခက်အခဲကို ရွေးချယ်ပါ သို့မဟုတ် စာရိုက်ထည့်ပါ'
+              : 'Select a scenario above or type what is on your mind to receive compassionate grounding.'}
           </div>
         )}
       </div>

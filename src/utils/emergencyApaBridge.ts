@@ -20,8 +20,8 @@ export interface EmergencyRescuerPersistedState {
   generatedDraft: string;
 }
 
-export const EMERGENCY_RESCUER_SESSION_KEY = 'emergency_rescuer_state';
-export const APA_STUDIO_SESSION_KEY = 'apa7_word_studio_state';
+export const EMERGENCY_RESCUER_SESSION_KEY = 'emergency_rescuer_state_v2';
+export const APA_STUDIO_SESSION_KEY = 'apa7_word_studio_state_v2';
 
 export const DEFAULT_EMERGENCY_RESCUER_STATE: EmergencyRescuerPersistedState = {
   mode: 'assignment_activity',
@@ -127,14 +127,14 @@ export function formatCurrentSubmissionDate(date: Date = new Date()): string {
 export function createDefaultApaStudioState(): ApaStudioPersistedState {
   return {
     templateType: 'assignment_activity',
-    customFileName: 'Unit_5_Assignment_Activity',
-    assignmentTitle: 'Unit 5 Assignment Activity',
-    paperTopicTitle: "Myanmar's Womenomics and Development Initiatives",
-    institution: 'University of the People',
-    courseCode: 'POLS 1503-01 AY2027-T1',
-    instructorName: 'Innocent Ndock Kong',
-    studentName: 'Htet Thura Aung',
-    submissionDate: 'November 5, 2026',
+    customFileName: '',
+    assignmentTitle: '',
+    paperTopicTitle: '',
+    institution: '',
+    courseCode: '',
+    instructorName: '',
+    studentName: '',
+    submissionDate: '',
     bodyContent: '',
     referencesContent: '',
     savedReferences: [],
@@ -172,7 +172,7 @@ export function loadApaStudioState(): ApaStudioPersistedState {
   if (memoryApaStudioState) {
     return memoryApaStudioState;
   }
-  const defaults = createDefaultApaStudioState();
+  const defaults = createBlankApaStudioState();
   if (typeof window !== 'undefined') {
     try {
       const raw = window.sessionStorage.getItem(APA_STUDIO_SESSION_KEY);

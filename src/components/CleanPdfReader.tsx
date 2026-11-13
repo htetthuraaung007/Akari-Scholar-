@@ -73,8 +73,8 @@ interface Tab1PersistedState {
   academicSummary: any;
 }
 
-const TAB1_STORAGE_KEY = 'matrix_tab1_data';
-const TAB1_PDF_OBJECT_KEY = 'matrix_tab1_pdf_doc';
+const TAB1_STORAGE_KEY = 'matrix_tab1_data_v2';
+const TAB1_PDF_OBJECT_KEY = 'matrix_tab1_pdf_doc_v2';
 const TAB1_DEFAULT_STATE: Tab1PersistedState = {
   sourceMode: 'upload',
   urlInput: '',

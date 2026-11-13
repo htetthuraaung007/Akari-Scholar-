@@ -4,7 +4,7 @@ import {
   UoPeopleTermCycle,
 } from './uopeopleCalendar';
 
-export const CGPA_HISTORY_STORAGE_KEY = 'uopeople_cgpa_history';
+export const CGPA_HISTORY_STORAGE_KEY = 'uopeople_cgpa_history_v2';
 export const LEGACY_CGPA_STORAGE_KEY = 'akari_cgpa_terms';
 
 export type UoPeopleGrade =
@@ -112,6 +112,42 @@ export function calculateCgpa(terms: TermRecord[]): CgpaSummary {
     totalGpaCredits > 0
       ? Math.min(4.0, Math.round((totalQualityPoints / totalGpaCredits) * 100) / 100)
       : 0.0;
+
+  if (totalGpaCredits === 0 && totalEarnedCredits === 0) {
+    return {
+      cumulativeGpa: 0.0,
+      totalGpaCredits: 0,
+      totalEarnedCredits: 0,
+      totalQualityPoints: 0,
+      honorsBadge: {
+        label: 'Standing: Not Yet Calculated',
+        color: 'text-slate-400 bg-slate-800/70 border-slate-700',
+      },
+      scholarshipStatus: {
+        safe: true,
+        label: '🎓 No Grades Recorded Yet',
+        color: 'text-slate-300 bg-slate-800/80 border-slate-700',
+      },
+    };
+  }
+
+  if (totalGpaCredits === 0 && totalEarnedCredits === 0) {
+    return {
+      cumulativeGpa: 0.0,
+      totalGpaCredits: 0,
+      totalEarnedCredits: 0,
+      totalQualityPoints: 0,
+      honorsBadge: {
+        label: 'Standing: Not Yet Calculated',
+        color: 'text-slate-400 bg-slate-800/70 border-slate-700',
+      },
+      scholarshipStatus: {
+        safe: true,
+        label: '🎓 No Grades Recorded Yet',
+        color: 'text-slate-300 bg-slate-800/80 border-slate-700',
+      },
+    };
+  }
 
   // Academic Honors & Standing
   let honorsBadge = {

@@ -59,7 +59,7 @@ interface WorkspacePersistedState {
   emergencyResult: string;
 }
 
-const WORKSPACE_SESSION_KEY = 'akari_assignment_workspace_state_v1';
+const WORKSPACE_SESSION_KEY = 'akari_assignment_workspace_state_v2';
 
 const DEFAULT_PERSISTED_STATE: WorkspacePersistedState = {
   outlineInput: '',
@@ -318,13 +318,13 @@ export const AssignmentWorkspace: React.FC<AssignmentWorkspaceProps> = ({
 
   // 1D. Advisor Email States
   const [emailTemplateType, setEmailTemplateType] = useState<'blackout' | 'medical' | 'technical' | 'custom'>('blackout');
-  const [emailCourseName, setEmailCourseName] = useState('POLS 1503 - Globalization');
+  const [emailCourseName, setEmailCourseName] = useState('');
   const [emailRecipientRole] = useState<'instructor' | 'advisor' | 'both'>('instructor');
-  const [emailInstructorName, setEmailInstructorName] = useState('Dr. Innocent Ndock Kong');
-  const [emailStudentName, setEmailStudentName] = useState('Thin Yati Aung');
+  const [emailInstructorName, setEmailInstructorName] = useState('');
+  const [emailStudentName, setEmailStudentName] = useState('');
   const [emailStudentID, setEmailStudentID] = useState('');
   const [emailExtensionDays, setEmailExtensionDays] = useState('48 hours (2 Days)');
-  const [emailCustomReason, setEmailCustomReason] = useState('Due to an unexpected family emergency combined with severe local internet disruptions, I have been unable to submit my assignment on time.');
+  const [emailCustomReason, setEmailCustomReason] = useState('');
 
   const buildEmailTemplate = (
     type: 'blackout' | 'medical' | 'technical' | 'custom', 
@@ -336,34 +336,35 @@ export const AssignmentWorkspace: React.FC<AssignmentWorkspaceProps> = ({
     role = emailRecipientRole,
     custom = emailCustomReason
   ) => {
+    const courseDisplay = cName.trim() ? cName.trim() : '[Course Code / Name]';
+    const instructorDisplay = iName.trim() ? iName.trim() : 'Course Instructor';
+    const studentDisplay = sName.trim() ? sName.trim() : '[Your Full Name]';
     const idDisplay = sID.trim() ? sID : '[Your UoPeople ID]';
     const salutation = role === 'advisor'
       ? `Dear Program Advisor,`
       : role === 'both'
-      ? `Dear ${iName} and Program Advisor,`
-      : `Dear ${iName},`;
+      ? `Dear ${instructorDisplay} and Program Advisor,`
+      : `Dear ${instructorDisplay},`;
 
     const extensionPhrase = (!days || days === 'none' || days.includes('General'))
       ? 'an academic extension'
       : `an academic extension of ${days}`;
 
     if (type === 'blackout') {
-      return `Subject: Urgent Extension Request - Localized Infrastructure Disruption [${cName}]\n\n${salutation}\n\nI hope this email finds you well.\n\nI am writing to respectfully request ${extensionPhrase} for the upcoming coursework submission in ${cName}. In Yangon, Myanmar, we are currently experiencing severe rolling power outages and localized telecommunication disruptions, severely impeding my regular access to the learning portal and academic resources.\n\nI have already drafted the initial analysis and will finalize and upload my submission as soon as stable electricity and network access are restored. I truly appreciate your understanding, flexibility, and continuous guidance under these challenging local circumstances.\n\nThank you very much for your time and kind consideration.\n\nSincerely,\n${sName}\nStudent ID: ${idDisplay}\nUniversity of the People`;
+      return `Subject: Urgent Extension Request - Localized Infrastructure Disruption [${courseDisplay}]\n\n${salutation}\n\nI hope this email finds you well.\n\nI am writing to respectfully request ${extensionPhrase} for the upcoming coursework submission in ${courseDisplay}. In Yangon, Myanmar, we are currently experiencing severe rolling power outages and localized telecommunication disruptions, severely impeding my regular access to the learning portal and academic resources.\n\nI have already drafted the initial analysis and will finalize and upload my submission as soon as stable electricity and network access are restored. I truly appreciate your understanding, flexibility, and continuous guidance under these challenging local circumstances.\n\nThank you very much for your time and kind consideration.\n\nSincerely,\n${studentDisplay}\nStudent ID: ${idDisplay}\nUniversity of the People`;
     } else if (type === 'medical') {
-      return `Subject: Urgent Academic Consideration - Medical Emergency [${cName}]\n\n${salutation}\n\nI hope you are doing well.\n\nI am writing to formally request ${extensionPhrase} for my coursework in ${cName} due to an unexpected medical emergency. I am currently under medical rest and care, which has temporarily restricted my ability to complete my submission on schedule.\n\nI expect to fully resume my academic duties within a few days and am prepared to provide any relevant documentation if required by the university policy.\n\nThank you very much for your understanding and continuous support.\n\nWarm regards,\n${sName}\nStudent ID: ${idDisplay}\nUniversity of the People`;
+      return `Subject: Urgent Academic Consideration - Medical Emergency [${courseDisplay}]\n\n${salutation}\n\nI hope you are doing well.\n\nI am writing to formally request ${extensionPhrase} for my coursework in ${courseDisplay} due to an unexpected medical emergency. I am currently under medical rest and care, which has temporarily restricted my ability to complete my submission on schedule.\n\nI expect to fully resume my academic duties within a few days and am prepared to provide any relevant documentation if required by the university policy.\n\nThank you very much for your understanding and continuous support.\n\nWarm regards,\n${studentDisplay}\nStudent ID: ${idDisplay}\nUniversity of the People`;
     } else if (type === 'technical') {
-      return `Subject: LMS Submission Error & Extension Request [${cName}]\n\n${salutation}\n\nI hope this message finds you well.\n\nI am writing to report a technical issue encountered on the UoPeople Moodle platform while attempting to upload my assignment for ${cName}. The portal experienced an unexpected timeout / upload error prior to the deadline.\n\nAttached to this email is my finalized coursework file along with a screenshot of the submission error for your verification. I respectfully request your permission to record this submission or grant ${extensionPhrase} to re-upload once the portal stabilizes.\n\nThank you for your assistance and support.\n\nRespectfully,\n${sName}\nStudent ID: ${idDisplay}\nUniversity of the People`;
+      return `Subject: LMS Submission Error & Extension Request [${courseDisplay}]\n\n${salutation}\n\nI hope this message finds you well.\n\nI am writing to report a technical issue encountered on the UoPeople Moodle platform while attempting to upload my assignment for ${courseDisplay}. The portal experienced an unexpected timeout / upload error prior to the deadline.\n\nAttached to this email is my finalized coursework file along with a screenshot of the submission error for your verification. I respectfully request your permission to record this submission or grant ${extensionPhrase} to re-upload once the portal stabilizes.\n\nThank you for your assistance and support.\n\nRespectfully,\n${studentDisplay}\nStudent ID: ${idDisplay}\nUniversity of the People`;
     } else {
       const sanitizedReason = /[\u1000-\u109F]/.test(custom)
         ? 'Due to an unexpected personal and family emergency along with localized severe infrastructure disruptions, I am temporarily restricted from completing my coursework on schedule.'
         : custom.trim() || 'Unforeseen academic and personal constraints.';
-      return `Subject: Formal Request for Coursework Consideration & Extension [${cName}]\n\n${salutation}\n\nI hope this email finds you well.\n\nI am writing to formally request ${extensionPhrase} regarding my coursework in ${cName}.\n\nReason for Request:\n${sanitizedReason}\n\nI am fully dedicated to my academic progress and have already completed the preliminary preparation for this work. I will finalize and submit the completed assignment as soon as possible.\n\nThank you very much for your time, understanding, and kind consideration.\n\nSincerely,\n${sName}\nStudent ID: ${idDisplay}\nUniversity of the People`;
+      return `Subject: Formal Request for Coursework Consideration & Extension [${courseDisplay}]\n\n${salutation}\n\nI hope this email finds you well.\n\nI am writing to formally request ${extensionPhrase} regarding my coursework in ${courseDisplay}.\n\nReason for Request:\n${sanitizedReason}\n\nI am fully dedicated to my academic progress and have already completed the preliminary preparation for this work. I will finalize and submit the completed assignment as soon as possible.\n\nThank you very much for your time, understanding, and kind consideration.\n\nSincerely,\n${studentDisplay}\nStudent ID: ${idDisplay}\nUniversity of the People`;
     }
   };
 
-  const [emailGenerated, setEmailGenerated] = useState(() => {
-    return buildEmailTemplate('blackout', 'POLS 1503 - Globalization', 'Dr. Innocent Ndock Kong', 'Thin Yati Aung', '', '48 hours (2 Days)', 'instructor', '');
-  });
+  const [emailGenerated, setEmailGenerated] = useState('');
 
   // 2. Discussion Reply Advanced States (Hydrated from Persistent Session Cache)
   const [discussionTab, setDiscussionTab] = useState<'peer' | 'followup'>('peer');

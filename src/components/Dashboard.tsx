@@ -120,18 +120,24 @@ export const Dashboard: React.FC<{ onOpenWorkspace?: (workspaceKey: string, card
       <DashboardStreakWidget />
 
       {/* Recent Tools Section */}
-      {recentTools.length > 0 && (
-        <div className="p-5 rounded-2xl bg-gradient-to-r from-slate-900 via-slate-950 to-indigo-950/50 border border-indigo-500/30 shadow-xl space-y-3">
-          <div className="flex items-center justify-between">
-            <span className="text-xs font-bold uppercase tracking-wider text-indigo-400 flex items-center space-x-2">
-              <Sparkles className="w-4 h-4 text-indigo-400" />
-              <span>{language === 'my' ? '⚡ လတ်တလော အသုံးပြုခဲ့သော Tools များ' : '⚡ Recent Tools Accessed'}</span>
-            </span>
-            <span className="text-[11px] text-slate-400">
-              {language === 'my' ? 'နောက်ဆုံး ၃ ခု' : 'Last 3 visited'}
-            </span>
-          </div>
+      <div className="p-5 rounded-2xl bg-gradient-to-r from-slate-900 via-slate-950 to-indigo-950/50 border border-indigo-500/30 shadow-xl space-y-3">
+        <div className="flex items-center justify-between">
+          <span className="text-xs font-bold uppercase tracking-wider text-indigo-400 flex items-center space-x-2">
+            <Sparkles className="w-4 h-4 text-indigo-400" />
+            <span>{language === 'my' ? '⚡ လတ်တလော အသုံးပြုခဲ့သော Tools များ' : '⚡ Recent Tools Accessed'}</span>
+          </span>
+          <span className="text-[11px] text-slate-400">
+            {language === 'my' ? 'နောက်ဆုံး ၃ ခု' : 'Last 3 visited'}
+          </span>
+        </div>
 
+        {recentTools.length === 0 ? (
+          <p className="text-xs text-slate-400 py-2">
+            {language === 'my'
+              ? 'လက်တလော အသုံးပြုထားသော Tools မရှိသေးပါ (အောက်ပါ Workspaces များမှ စတင်အသုံးပြုနိုင်ပါသည်)။'
+              : 'No recent tools accessed yet (Launch any workspace below to get started).'}
+          </p>
+        ) : (
           <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
             {recentTools.map((tool) => (
               <div
@@ -170,8 +176,8 @@ export const Dashboard: React.FC<{ onOpenWorkspace?: (workspaceKey: string, card
               </div>
             ))}
           </div>
-        </div>
-      )}
+        )}
+      </div>
 
       {/* Metrics Row */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
@@ -204,7 +210,7 @@ export const Dashboard: React.FC<{ onOpenWorkspace?: (workspaceKey: string, card
         >
           <div className="flex items-center justify-between mb-3">
             <span className="text-xs font-semibold text-slate-400 uppercase tracking-wider">
-              Target: {settings.targetCgpa.toFixed(2)}
+              Target: {settings.targetCgpa > 0 ? settings.targetCgpa.toFixed(2) : '—'}
             </span>
             <div className="w-8 h-8 rounded-lg bg-emerald-500/10 text-emerald-400 flex items-center justify-center group-hover:scale-110 transition-transform">
               <Target className="w-4 h-4" />
@@ -212,7 +218,11 @@ export const Dashboard: React.FC<{ onOpenWorkspace?: (workspaceKey: string, card
           </div>
           <div className="flex items-baseline space-x-2">
             <span className="text-3xl font-extrabold text-emerald-400">
-              {forecast.achievable ? forecast.needed.toFixed(2) : '> 4.00'}
+              {settings.targetCgpa > 0 && settings.remainingCredits > 0
+                ? forecast.achievable
+                  ? forecast.needed.toFixed(2)
+                  : '> 4.00'
+                : '—'}
             </span>
             <span className="text-xs text-slate-400">min GPA needed</span>
           </div>
@@ -239,7 +249,13 @@ export const Dashboard: React.FC<{ onOpenWorkspace?: (workspaceKey: string, card
             <span className="text-xs text-slate-400">of {flashcards.length} total cards</span>
           </div>
           <p className="text-xs text-slate-400 mt-2">
-            {language === 'my' ? 'SM-2 မေ့လွယ်/မှတ်မိ အစီအစဉ်' : 'SuperMemo SM-2 Spaced Repetition'}
+            {flashcards.length === 0
+              ? language === 'my'
+                ? 'ကတ်အသစ်များ ထည့်သွင်းလေ့ကျင့်ပါ'
+                : 'Add flashcards to start SM-2 review'
+              : language === 'my'
+              ? 'SM-2 မေ့လွယ်/မှတ်မိ အစီအစဉ်'
+              : 'SuperMemo SM-2 Spaced Repetition'}
           </p>
         </div>
 
@@ -254,7 +270,9 @@ export const Dashboard: React.FC<{ onOpenWorkspace?: (workspaceKey: string, card
             </span>
             <div
               className={`w-8 h-8 rounded-lg flex items-center justify-center group-hover:scale-110 transition-transform ${
-                burnoutRisk === 'healthy'
+                !burnoutLog.lastUpdated
+                  ? 'bg-slate-800/80 text-slate-300'
+                  : burnoutRisk === 'healthy'
                   ? 'bg-emerald-500/10 text-emerald-400'
                   : burnoutRisk === 'moderate'
                   ? 'bg-amber-500/10 text-amber-400'
@@ -267,14 +285,18 @@ export const Dashboard: React.FC<{ onOpenWorkspace?: (workspaceKey: string, card
           <div className="flex items-baseline space-x-2">
             <span
               className={`text-xl font-extrabold uppercase ${
-                burnoutRisk === 'healthy'
+                !burnoutLog.lastUpdated
+                  ? 'text-slate-200'
+                  : burnoutRisk === 'healthy'
                   ? 'text-emerald-400'
                   : burnoutRisk === 'moderate'
                   ? 'text-amber-400'
                   : 'text-red-400'
               }`}
             >
-              {burnoutRisk === 'healthy'
+              {!burnoutLog.lastUpdated
+                ? 'Normal / Fresh'
+                : burnoutRisk === 'healthy'
                 ? 'Optimal'
                 : burnoutRisk === 'moderate'
                 ? 'Moderate'

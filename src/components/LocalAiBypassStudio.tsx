@@ -12,8 +12,8 @@ if (typeof window !== 'undefined' && 'Worker' in window) {
   pdfjsLib.GlobalWorkerOptions.workerSrc = `https://cdnjs.cloudflare.com/ajax/libs/pdf.js/${pdfjsLib.version}/pdf.worker.min.js`;
 }
 
-const COT_HUMANIZER_SESSION_KEY = 'cot_humanizer_state';
-const PLAGIARISM_SCANNER_SESSION_KEY = 'plagiarism_scanner_state';
+const COT_HUMANIZER_SESSION_KEY = 'cot_humanizer_state_v2';
+const PLAGIARISM_SCANNER_SESSION_KEY = 'plagiarism_scanner_state_v2';
 
 const DEFAULT_HUMANIZER_SAMPLE =
   'Public health suffers from uneven distribution. Social factors like income and geography define access. Vulnerable groups struggle with financial limits. Furthermore, it is crucial to recognize that systemic underfunding remains a core problem.';
@@ -89,7 +89,7 @@ function loadHumanizerSessionState(): CotHumanizerSessionState {
           humanizerInput:
             typeof parsed.humanizerInput === 'string'
               ? parsed.humanizerInput
-              : DEFAULT_HUMANIZER_SAMPLE,
+              : '',
           humanizerResult:
             parsed.humanizerResult && typeof parsed.humanizerResult.humanizedText === 'string'
               ? parsed.humanizerResult
@@ -103,7 +103,7 @@ function loadHumanizerSessionState(): CotHumanizerSessionState {
     }
   }
   return {
-    humanizerInput: DEFAULT_HUMANIZER_SAMPLE,
+    humanizerInput: '',
     humanizerResult: null,
     humanizerToneRegister: 'scholarly',
   };

@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { executeGeminiRequest } from '../services/geminiService';
 
-const PARAPHRASER_STORAGE_KEY = 'paraphraser_active_state';
+const PARAPHRASER_STORAGE_KEY = 'paraphraser_active_state_v2';
 
 interface ParaphraserPersistedState {
   paraphraseText: string;

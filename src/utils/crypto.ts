@@ -3,7 +3,7 @@
  * Zero data ever leaves the user's browser unencrypted.
  */
 
-const STORAGE_KEY = 'students_suite_encrypted_store_v1';
+const STORAGE_KEY = 'students_suite_encrypted_store_v2';
 const LEGACY_STORAGE_KEY = 'akari_encrypted_store_v1';
 const SALT_KEY = 'students_suite_crypto_salt_v1';
 const LEGACY_SALT_KEY = 'akari_crypto_salt_v1';
@@ -88,7 +88,7 @@ export async function encryptAndSave(data: any, customPassphrase?: string): Prom
 
 export async function loadAndDecrypt<T>(customPassphrase?: string): Promise<T | null> {
   try {
-    const raw = localStorage.getItem(STORAGE_KEY) || localStorage.getItem(LEGACY_STORAGE_KEY);
+    const raw = localStorage.getItem(STORAGE_KEY);
     if (!raw) return null;
 
     const parsed = JSON.parse(raw);

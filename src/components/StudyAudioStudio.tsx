@@ -30,25 +30,25 @@ export const StudyAudioStudio: React.FC<StudyAudioStudioProps> = ({
 }) => {
   // Queue & Track State
   const [queue, setQueue] = useState<MusicTrack[]>(() => {
-    const saved = localStorage.getItem('akari_music_queue');
+    const saved = localStorage.getItem('akari_music_queue_v2');
     if (saved) {
       try {
         const parsed = JSON.parse(saved);
-        if (Array.isArray(parsed) && parsed.length > 0) return parsed;
+        if (Array.isArray(parsed)) return parsed;
       } catch {}
     }
-    return PRESET_YOUTUBE_TRACKS;
+    return [];
   });
 
   const [currentTrackIndex, setCurrentTrackIndex] = useState<number>(() => {
-    const idx = localStorage.getItem('akari_current_track_idx');
+    const idx = localStorage.getItem('akari_current_track_idx_v2');
     const parsed = idx ? parseInt(idx, 10) : 0;
     return isNaN(parsed) || parsed < 0 ? 0 : parsed;
   });
 
   // History State
   const [history, setHistory] = useState<MusicTrack[]>(() => {
-    const saved = localStorage.getItem('akari_music_history');
+    const saved = localStorage.getItem('akari_music_history_v2');
     if (saved) {
       try {
         const parsed = JSON.parse(saved);
@@ -62,10 +62,10 @@ export const StudyAudioStudio: React.FC<StudyAudioStudioProps> = ({
 
   // Active Track & Strictly Stable Iframe Config
   // iframeConfig ONLY changes when a different song (youtubeId) is loaded.
-  const initialTrack = queue[currentTrackIndex] || PRESET_YOUTUBE_TRACKS[0];
-  const [activeTrack, setActiveTrack] = useState<MusicTrack>(initialTrack);
+  const initialTrack: MusicTrack | null = queue[currentTrackIndex] || queue[0] || null;
+  const [activeTrack, setActiveTrack] = useState<MusicTrack | null>(initialTrack);
   const [iframeConfig, setIframeConfig] = useState<{ youtubeId: string; autoplay: 0 | 1 }>({
-    youtubeId: initialTrack.youtubeId,
+    youtubeId: initialTrack ? initialTrack.youtubeId : '',
     autoplay: 0
   });
 
@@ -73,13 +73,13 @@ export const StudyAudioStudio: React.FC<StudyAudioStudioProps> = ({
   const isPlayingRef = useRef<boolean>(false);
 
   const [isRepeatOne, setIsRepeatOne] = useState<boolean>(() => {
-    return localStorage.getItem('akari_music_repeat_one') === 'true';
+    return localStorage.getItem('akari_music_repeat_one_v2') === 'true';
   });
   const isRepeatOneRef = useRef<boolean>(isRepeatOne);
 
   // Next / Previous Navigation Source Mode ('ask' | 'queue' | 'history')
   const [navSourceMode, setNavSourceMode] = useState<NavSourceMode>(() => {
-    const saved = localStorage.getItem('akari_music_nav_mode');
+    const saved = localStorage.getItem('akari_music_nav_mode_v2');
     if (saved === 'queue' || saved === 'history' || saved === 'ask') return saved;
     return 'ask';
   });
@@ -231,11 +231,11 @@ export const StudyAudioStudio: React.FC<StudyAudioStudioProps> = ({
   // Sync to Storage
   useEffect(() => {
     try {
-      localStorage.setItem('akari_music_queue', JSON.stringify(queue));
-      localStorage.setItem('akari_current_track_idx', String(currentTrackIndex));
-      localStorage.setItem('akari_music_repeat_one', String(isRepeatOne));
-      localStorage.setItem('akari_music_history', JSON.stringify(history));
-      localStorage.setItem('akari_music_nav_mode', navSourceMode);
+      localStorage.setItem('akari_music_queue_v2', JSON.stringify(queue));
+      localStorage.setItem('akari_current_track_idx_v2', String(currentTrackIndex));
+      localStorage.setItem('akari_music_repeat_one_v2', String(isRepeatOne));
+      localStorage.setItem('akari_music_history_v2', JSON.stringify(history));
+      localStorage.setItem('akari_music_nav_mode_v2', navSourceMode);
     } catch {}
   }, [queue, currentTrackIndex, isRepeatOne, history, navSourceMode]);
 
@@ -273,6 +273,7 @@ export const StudyAudioStudio: React.FC<StudyAudioStudioProps> = ({
       if (queueChanged) {
         setQueue(updatedQueue);
         setActiveTrack((prev) => {
+          if (!prev) return null;
           const match = updatedQueue.find((q) => q.youtubeId === prev.youtubeId);
           return match ? { ...prev, title: match.title } : prev;
         });
@@ -391,6 +392,15 @@ export const StudyAudioStudio: React.FC<StudyAudioStudioProps> = ({
   };
 
   const handlePlay = () => {
+    if (!activeTrack) {
+      if (queue.length > 0) {
+        const firstTrack = queue[currentTrackIndex] || queue[0];
+        loadAndPlayTrack(firstTrack, true, false);
+      } else {
+        showToast('ဖွင့်လှစ်လိုသော တေးဂီတ သို့မဟုတ် Lofi beats များကို ရှာဖွေထည့်သွင်းပါ');
+      }
+      return;
+    }
     setIsPlaying(true);
     sendPlayerCommand('playVideo');
   };
@@ -509,7 +519,9 @@ export const StudyAudioStudio: React.FC<StudyAudioStudioProps> = ({
         showToast('History မှတ်တမ်းထဲတွင် သီချင်းမရှိသေးပါခင်ဗျာ။');
         return;
       }
-      const currentIdxInHist = history.findIndex((h) => h.youtubeId === activeTrack.youtubeId);
+      const currentIdxInHist = activeTrack
+        ? history.findIndex((h) => h.youtubeId === activeTrack.youtubeId)
+        : -1;
       const baseIdx = currentIdxInHist !== -1 ? currentIdxInHist : currentHistoryIndex;
       const nextHistIdx =
         direction === 'next'
@@ -988,7 +1000,7 @@ export const StudyAudioStudio: React.FC<StudyAudioStudioProps> = ({
                 loadAndPlayTrack(track, true, true);
               }}
               className={`px-3 py-1.5 rounded-xl border text-xs font-semibold transition-all cursor-pointer ${
-                activeTrack.youtubeId === track.youtubeId
+                activeTrack?.youtubeId === track.youtubeId
                   ? 'bg-rose-950/70 border-rose-600 text-rose-300 shadow'
                   : 'bg-slate-950 border-slate-800 text-slate-300 hover:border-slate-700'
               }`}
@@ -1007,8 +1019,11 @@ export const StudyAudioStudio: React.FC<StudyAudioStudioProps> = ({
                   isPlaying ? 'bg-rose-500 animate-pulse' : 'bg-slate-600'
                 }`}
               />
-              <span className="text-xs font-bold text-slate-200 truncate" title={activeTrack.title}>
-                🎵 {activeTrack.title}
+              <span
+                className="text-xs font-bold text-slate-200 truncate"
+                title={activeTrack ? activeTrack.title : 'ရွေးချယ်ထားသော သီချင်း မရှိသေးပါ'}
+              >
+                🎵 {activeTrack ? activeTrack.title : 'ရွေးချယ်ထားသော သီချင်း မရှိသေးပါ (Idle)'}
               </span>
             </div>
 
@@ -1076,7 +1091,7 @@ export const StudyAudioStudio: React.FC<StudyAudioStudioProps> = ({
               <button
                 type="button"
                 onClick={() => {
-                  if (!isPlaying) {
+                  if (!isPlaying && (activeTrack || queue.length > 0)) {
                     setIsPipFloating(true);
                   }
                   togglePlayPause();
@@ -1192,14 +1207,16 @@ export const StudyAudioStudio: React.FC<StudyAudioStudioProps> = ({
               </div>
             </div>
             {queue.length === 0 ? (
-              <p className="text-xs text-slate-500 py-2">သီချင်းစာရင်း မရှိသေးပါ</p>
+              <p className="text-xs text-slate-500 py-2">
+                ဖွင့်လှစ်လိုသော တေးဂီတ သို့မဟုတ် Lofi beats များကို အပေါ်ဘက်မှ ရှာဖွေထည့်သွင်းပါ
+              </p>
             ) : (
               <div className="space-y-1 max-h-60 overflow-y-auto">
                 {queue.map((track, idx) => (
                   <div
                     key={`${track.id}_${idx}`}
                     className={`p-2 rounded-lg flex items-center justify-between text-xs transition-all ${
-                      activeTrack.youtubeId === track.youtubeId && idx === currentTrackIndex
+                      activeTrack?.youtubeId === track.youtubeId && idx === currentTrackIndex
                         ? 'bg-rose-950/70 border border-rose-800 text-rose-200'
                         : 'bg-slate-900/50 text-slate-300'
                     }`}
@@ -1283,7 +1300,7 @@ export const StudyAudioStudio: React.FC<StudyAudioStudioProps> = ({
                   <div
                     key={`${item.youtubeId}_${i}`}
                     className={`p-2 rounded-lg flex items-center justify-between text-xs transition-all ${
-                      activeTrack.youtubeId === item.youtubeId
+                      activeTrack?.youtubeId === item.youtubeId
                         ? 'bg-amber-950/60 border border-amber-700/60 text-amber-200'
                         : 'bg-slate-900/60 text-slate-300'
                     }`}
@@ -1341,7 +1358,7 @@ export const StudyAudioStudio: React.FC<StudyAudioStudioProps> = ({
             key={iframeConfig.youtubeId}
             onLoad={subscribeToYouTubeTelemetry}
             src={masterIframeSrc}
-            title={activeTrack.title}
+            title={activeTrack ? activeTrack.title : 'Study Audio Studio'}
             className="w-full h-full border-0"
             allow="autoplay; encrypted-media; picture-in-picture"
             allowFullScreen
@@ -1427,8 +1444,11 @@ export const StudyAudioStudio: React.FC<StudyAudioStudioProps> = ({
                     isPlaying ? 'bg-emerald-400 animate-pulse' : 'bg-slate-600'
                   }`}
                 />
-                <span className="text-xs font-bold text-slate-100 truncate" title={activeTrack.title}>
-                  {activeTrack.title}
+                <span
+                  className="text-xs font-bold text-slate-100 truncate"
+                  title={activeTrack ? activeTrack.title : 'Idle'}
+                >
+                  {activeTrack ? activeTrack.title : 'ရွေးချယ်ထားသော သီချင်း မရှိသေးပါ'}
                 </span>
               </div>
 
@@ -1638,7 +1658,7 @@ export const StudyAudioStudio: React.FC<StudyAudioStudioProps> = ({
                 }`}
               />
               <span className="truncate max-w-[140px] text-[11px] font-semibold">
-                {activeTrack.title}
+                {activeTrack ? activeTrack.title : 'Idle'}
               </span>
               <span className="text-[10px] font-mono text-cyan-400">
                 ⏱️ {formatTime(currentTimeSec)}

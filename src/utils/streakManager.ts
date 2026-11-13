@@ -13,13 +13,13 @@ export const INITIAL_STREAK_STATE: StreakState = {
   currentStreak: 0,
   longestStreak: 0,
   lastActiveDate: '',
-  streakFreezesRemaining: 1,
+  streakFreezesRemaining: 0,
   todayCompleted: false,
   weeklyActivityMap: [false, false, false, false, false, false, false],
   unlockedMilestones: [],
 };
 
-const STREAK_STORAGE_KEY = 'akari_learning_streak_v1';
+const STREAK_STORAGE_KEY = 'akari_learning_streak_v2';
 
 export function getTodayDateString(): string {
   const now = new Date();

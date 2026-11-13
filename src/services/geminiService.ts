@@ -79,12 +79,12 @@ export interface DailyUsageRecord {
   estimatedTokens: number;
 }
 
-const DAILY_USAGE_STORAGE_KEY = 'akari_daily_usage';
-export const FLASHCARD_DECK_STORAGE_KEY = 'akari_flashcard_deck';
+const DAILY_USAGE_STORAGE_KEY = 'akari_daily_usage_v2';
+export const FLASHCARD_DECK_STORAGE_KEY = 'akari_flashcard_deck_v2';
 
 export function getQuizStorageKeyForWeek(weekTag: string): string {
   const cleanWeek = (weekTag || 'Week 1').replace(/\s+/g, '_');
-  return `akari_saved_quizzes_${cleanWeek}`;
+  return `akari_saved_quizzes_v2_${cleanWeek}`;
 }
 
 export function getDailyUsage(): DailyUsageRecord {

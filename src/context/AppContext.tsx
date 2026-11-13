@@ -140,50 +140,9 @@ const GRADE_POINTS: Record<Grade, number> = {
   'F': 0.0,
 };
 
-const initialTerms: Term[] = [
-  {
-    id: 'term-1',
-    name: 'Year 1 Term 1 (Sample)',
-    courses: [
-      { id: 'c-1', code: 'CS101', name: 'Intro to Computer Science', credits: 3, grade: 'A' },
-      { id: 'c-2', code: 'ENG102', name: 'Academic Writing & Research', credits: 3, grade: 'A-' },
-      { id: 'c-3', code: 'MATH110', name: 'Calculus I', credits: 4, grade: 'B+' },
-    ],
-  },
-  {
-    id: 'term-2',
-    name: 'Year 1 Term 2 (Sample)',
-    courses: [
-      { id: 'c-4', code: 'CS102', name: 'Data Structures & Algorithms', credits: 4, grade: 'A' },
-      { id: 'c-5', code: 'PHYS101', name: 'University Physics', credits: 4, grade: 'B' },
-    ],
-  },
-];
+const initialTerms: Term[] = [];
 
-const initialFlashcards: Flashcard[] = [
-  {
-    id: 'fc-1',
-    front: 'What is Epistemology? (ဒဿနဗေဒဆိုင်ရာ အသိပညာ သီအိုရီ)',
-    back: 'The philosophical study of the nature, origin, and limits of human knowledge (အသိပညာ၏ သဘောသဘာဝနှင့် အရင်းအမြစ်ကို လေ့လာသော ပညာ).',
-    concept: 'Philosophy',
-    repetition: 1,
-    interval: 1,
-    easeFactor: 2.5,
-    nextReviewDate: new Date().toISOString(),
-    consecutiveCorrect: 1,
-  },
-  {
-    id: 'fc-2',
-    front: 'APA 7th: How do you format 3 or more authors in an in-text citation?',
-    back: 'Use the first author’s surname followed by "et al." and the year from the very first citation (e.g., Smith et al., 2024).',
-    concept: 'Academic Writing',
-    repetition: 0,
-    interval: 1,
-    easeFactor: 2.5,
-    nextReviewDate: new Date().toISOString(),
-    consecutiveCorrect: 0,
-  },
-];
+const initialFlashcards: Flashcard[] = [];
 
 const initialSettings: UserSettings = {
   language: 'my',
@@ -192,8 +151,8 @@ const initialSettings: UserSettings = {
   customOpenAiKey: '',
   customClaudeKey: '',
   activeProvider: 'server',
-  targetCgpa: 3.8,
-  remainingCredits: 30,
+  targetCgpa: 0,
+  remainingCredits: 0,
   isEncrypted: true,
   honorCodeAccepted: false,
   dataSaverMode: false,
@@ -202,11 +161,11 @@ const initialSettings: UserSettings = {
 };
 
 const initialBurnout: BurnoutLog = {
-  energyLevel: 8,
-  stressLevel: 4,
-  studyHoursToday: 3.5,
-  sleepHours: 7,
-  lastUpdated: new Date().toISOString(),
+  energyLevel: 10,
+  stressLevel: 0,
+  studyHoursToday: 0,
+  sleepHours: 0,
+  lastUpdated: '',
 };
 
 export const DEFAULT_STUDY_PLAYLIST: PlaylistItem[] = [
@@ -234,7 +193,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
   // Reading Sessions Persistence
   const [readingSessions, setReadingSessions] = useState<Record<string, ReadingSessionProgress>>(() => {
     try {
-      const saved = localStorage.getItem('akari_scholar_reading_sessions_v1');
+      const saved = localStorage.getItem('akari_scholar_reading_sessions_v2');
       if (saved) {
         return JSON.parse(saved);
       }
@@ -246,7 +205,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
 
   useEffect(() => {
     try {
-      localStorage.setItem('akari_scholar_reading_sessions_v1', JSON.stringify(readingSessions));
+      localStorage.setItem('akari_scholar_reading_sessions_v2', JSON.stringify(readingSessions));
     } catch (e) {
       console.warn('Failed to save reading sessions to localStorage:', e);
     }
@@ -580,21 +539,21 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     setCitations([]);
     setBurnoutLog({
       energyLevel: 10,
-      stressLevel: 1,
+      stressLevel: 0,
       studyHoursToday: 0,
-      sleepHours: 8,
-      lastUpdated: new Date().toISOString(),
+      sleepHours: 0,
+      lastUpdated: '',
     });
     setSettings(initialSettings);
   };
 
   // JSON Encrypted Backup Export
   const exportEncryptedBackup = () => {
-    const rawData = localStorage.getItem('akari_encrypted_store_v1');
-    const salt = localStorage.getItem('akari_crypto_salt_v1');
+    const rawData = localStorage.getItem('students_suite_encrypted_store_v2');
+    const salt = localStorage.getItem('students_suite_crypto_salt_v1') || localStorage.getItem('akari_crypto_salt_v1');
     const backupObj = {
       type: 'students_suite_encrypted_backup',
-      version: 1,
+      version: 2,
       timestamp: new Date().toISOString(),
       salt,
       store: rawData ? JSON.parse(rawData) : null,
@@ -618,8 +577,8 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
       ) {
         return false;
       }
-      if (parsed.salt) localStorage.setItem('akari_crypto_salt_v1', parsed.salt);
-      localStorage.setItem('akari_encrypted_store_v1', JSON.stringify(parsed.store));
+      if (parsed.salt) localStorage.setItem('students_suite_crypto_salt_v1', parsed.salt);
+      localStorage.setItem('students_suite_encrypted_store_v2', JSON.stringify(parsed.store));
       window.location.reload();
       return true;
     } catch {
@@ -826,14 +785,14 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
 
   // Global Persistent YouTube Player State (never unmounts across tabs)
   const [youtubePlayer, setYoutubePlayer] = useState<GlobalMusicState>({
-    videoId: 'bHFKkCcUjW0', // Studio Ghibli Relaxing Piano default
-    title: '🍃 Studio Ghibli Relaxing Piano',
+    videoId: '',
+    title: '',
     isPlaying: false,
     isOpen: false,
     isMinimized: false,
     repeatMode: 'off',
-    playlist: DEFAULT_STUDY_PLAYLIST,
-    currentIndex: 2,
+    playlist: [],
+    currentIndex: 0,
   });
 
   const playYouTubeTrack = (videoId: string, title: string, customPlaylist?: PlaylistItem[]) => {
@@ -933,7 +892,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
 
   const [recentTools, setRecentTools] = useState<RecentToolItem[]>(() => {
     try {
-      const saved = localStorage.getItem('akari_recent_tools');
+      const saved = localStorage.getItem('akari_recent_tools_v2');
       return saved ? JSON.parse(saved) : [];
     } catch {
       return [];
@@ -948,7 +907,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
         ...filtered,
       ].slice(0, 3);
       try {
-        localStorage.setItem('akari_recent_tools', JSON.stringify(updated));
+        localStorage.setItem('akari_recent_tools_v2', JSON.stringify(updated));
       } catch {}
       return updated;
     });
