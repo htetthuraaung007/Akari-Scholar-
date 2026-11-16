@@ -112,6 +112,13 @@ export const Dashboard: React.FC<{ onOpenWorkspace?: (workspaceKey: string, card
               <Target className="w-4 h-4 text-emerald-400" />
               <span>CGPA Forecaster</span>
             </button>
+            <button
+              type="button"
+              onClick={() => setActiveTab('quick-guide')}
+              className="flex items-center space-x-2 px-4 py-2.5 rounded-xl bg-indigo-950/80 text-indigo-200 text-xs sm:text-sm font-semibold hover:bg-indigo-900/80 hover:text-white transition-colors border border-indigo-500/40 cursor-pointer"
+            >
+              <span>📚 UoPeople Quick Guide</span>
+            </button>
           </div>
         </div>
       </div>

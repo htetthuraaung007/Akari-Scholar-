@@ -22,6 +22,7 @@ import { SocraticThinkingWorkspace } from './components/SocraticThinkingWorkspac
 import { ResearchHub } from './components/ResearchHub';
 import { DeadlineNotificationBanner } from './components/DeadlineNotificationBanner';
 import { StudyAudioStudio } from './components/StudyAudioStudio';
+import { QuickGuideFAQ } from './components/QuickGuideFAQ';
 import { translations } from './translations';
 import { ActiveTab } from './types';
 import { useOnlineStatus } from './hooks/useOnlineStatus';
@@ -30,7 +31,7 @@ import {
   WifiOff,
 } from 'lucide-react';
 
-export type MainTabType = 'dashboard' | 'uopeople_scholar' | 'socratic' | 'originality' | 'rubric_guide';
+export type MainTabType = 'dashboard' | 'uopeople_scholar' | 'socratic' | 'originality' | 'rubric_guide' | 'quick-guide';
 
 const PRIMARY_NAV_ITEMS: { id: MainTabType; label: string; icon: string }[] = [
   { id: 'dashboard', label: 'ပင်မစာမျက်နှာ', icon: '🏠' },
@@ -38,6 +39,7 @@ const PRIMARY_NAV_ITEMS: { id: MainTabType; label: string; icon: string }[] = [
   { id: 'socratic', label: 'Socratic thinking', icon: '💡' },
   { id: 'originality', label: 'စာမူရင်းစိစစ်မှုနှင့် အသုံးအနှုန်း', icon: '🔍' },
   { id: 'rubric_guide', label: 'Assignment လမ်းညွှန်နှင့်စံနှုန်း', icon: '✨' },
+  { id: 'quick-guide', label: 'UoPeople Quick Guide', icon: '📖' },
 ];
 
 const MainLayout: React.FC = () => {
@@ -248,6 +250,9 @@ const MainLayout: React.FC = () => {
     }
     if (activeTab === 'pomodoro') {
       return <BurnoutPomodoro />;
+    }
+    if (activeTab === 'quick-guide') {
+      return <QuickGuideFAQ />;
     }
 
     // 3. ပင်မ Dashboard ပြသခြင်း

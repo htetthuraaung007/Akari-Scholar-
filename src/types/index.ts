@@ -153,4 +153,5 @@ export type ActiveTab =
   | 'academic_career'
   | 'scholarship_sop_studio'
   | 'pomodoro'
-  | 'originality';
+  | 'originality'
+  | 'quick-guide';
