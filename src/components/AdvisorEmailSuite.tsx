@@ -26,7 +26,8 @@ interface AdvisorEmailSuiteProps {
   language: 'my' | 'en';
 }
 
-const ADVISOR_EMAIL_SESSION_KEY = 'sop_tab3_state_v2';
+const ADVISOR_EMAIL_SESSION_KEY = 'akari_scholar_email_drafts_v1';
+const LEGACY_ADVISOR_EMAIL_SESSION_KEY = 'sop_tab3_state_v2';
 
 export interface AdvisorEmailState {
   studentName: string;
@@ -66,13 +67,16 @@ function getInitialAdvisorState(): AdvisorEmailState {
     hasCleared: false,
   };
 
-  return loadPersistedTabState<AdvisorEmailState>(ADVISOR_EMAIL_SESSION_KEY, fallback);
+  return loadPersistedTabState<AdvisorEmailState>(
+    ADVISOR_EMAIL_SESSION_KEY,
+    loadPersistedTabState<AdvisorEmailState>(LEGACY_ADVISOR_EMAIL_SESSION_KEY, fallback)
+  );
 }
 
 export const AdvisorEmailSuite: React.FC<AdvisorEmailSuiteProps> = () => {
   const initialState = getInitialAdvisorState();
 
-  // Zero-Loss State Persistence across sub-tab switching (`sop_tab3_state_v2`)
+  // Zero-Loss State Persistence across sub-tab switching & page refreshes (`akari_scholar_email_drafts_v1`)
   const [studentName, setStudentName] = useState(initialState.studentName);
   const [studentId, setStudentId] = useState(initialState.studentId);
   const [paCgpa, setPaCgpa] = useState(initialState.paCgpa);
@@ -94,9 +98,23 @@ export const AdvisorEmailSuite: React.FC<AdvisorEmailSuiteProps> = () => {
   const [copiedFull, setCopiedFull] = useState(false);
   const [copiedTab, setCopiedTab] = useState(false);
 
-  // Warm up verified dynamic Gemini catalog once
+  // Warm up verified dynamic Gemini catalog once & listen for Emergency Wipe
   useEffect(() => {
     void resolveDynamicModelCatalog();
+
+    const handleWipe = () => {
+      setStudentName('');
+      setStudentId('');
+      setPaCgpa('');
+      setPaDegree('');
+      setScholarshipScope('');
+      setUrgentNote('');
+      setPaEmailResult('');
+      setHasCleared(true);
+      setConfirmClearForm(false);
+    };
+    window.addEventListener('akari_emergency_wipe', handleWipe);
+    return () => window.removeEventListener('akari_emergency_wipe', handleWipe);
   }, []);
 
   // Sync inputs and generated output to sessionStorage (`sop_tab3_state_v2`) & localStorage

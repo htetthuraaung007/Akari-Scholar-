@@ -16,7 +16,8 @@ interface ChatMessage {
 }
 
 const DAILY_QUERY_LIMIT = 30;
-const CHAT_STORAGE_KEY = 'akari_socratic_chat_history';
+const CHAT_STORAGE_KEY = 'akari_socratic_chats_v1';
+const LEGACY_CHAT_STORAGE_KEY_V2 = 'akari_socratic_chat_history';
 const LEGACY_CHAT_STORAGE_KEY = 'socratic_chat_history';
 const DRAFT_INPUT_PERSIST_KEY = 'socratic_draft_input_v1';
 
@@ -31,6 +32,7 @@ function loadInitialChatHistory(): ChatMessage[] {
   if (typeof window === 'undefined') return [INITIAL_MENTOR_MESSAGE];
   const saved =
     localStorage.getItem(CHAT_STORAGE_KEY) ||
+    localStorage.getItem(LEGACY_CHAT_STORAGE_KEY_V2) ||
     localStorage.getItem(LEGACY_CHAT_STORAGE_KEY);
   if (saved) {
     try {
@@ -48,7 +50,9 @@ function loadInitialChatHistory(): ChatMessage[] {
 function persistChatHistory(nextMessages: ChatMessage[]): void {
   if (typeof window === 'undefined') return;
   try {
-    localStorage.setItem(CHAT_STORAGE_KEY, JSON.stringify(nextMessages));
+    const serialized = JSON.stringify(nextMessages);
+    localStorage.setItem(CHAT_STORAGE_KEY, serialized);
+    localStorage.setItem(LEGACY_CHAT_STORAGE_KEY_V2, serialized);
   } catch {
     // Ignore storage quota errors
   }
@@ -110,8 +114,17 @@ export const SocraticThinkingWorkspace: React.FC = () => {
     setLoading(activeSocraticInFlight);
     setDailyCount(getTodayCountFromStorage());
 
+    const handleWipe = () => {
+      setMessages([INITIAL_MENTOR_MESSAGE]);
+      setInputPrompt('');
+      setDailyCount(0);
+      setStatusNotice(null);
+    };
+    window.addEventListener('akari_emergency_wipe', handleWipe);
+
     return () => {
       isMountedRef.current = false;
+      window.removeEventListener('akari_emergency_wipe', handleWipe);
     };
   }, []);
 

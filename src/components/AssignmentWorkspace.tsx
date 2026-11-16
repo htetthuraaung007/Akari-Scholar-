@@ -59,7 +59,8 @@ interface WorkspacePersistedState {
   emergencyResult: string;
 }
 
-const WORKSPACE_SESSION_KEY = 'akari_assignment_workspace_state_v2';
+const WORKSPACE_SESSION_KEY = 'akari_assignment_hub_v1';
+const LEGACY_WORKSPACE_SESSION_KEY = 'akari_assignment_workspace_state_v2';
 
 const DEFAULT_PERSISTED_STATE: WorkspacePersistedState = {
   outlineInput: '',
@@ -90,13 +91,25 @@ let MEMORY_WORKSPACE_CACHE: WorkspacePersistedState | null = null;
 let MEMORY_UPLOADED_IMAGES: { name: string; dataUrl: string }[] = [];
 let MEMORY_DRAFT_RUBRIC_IMAGES: { name: string; dataUrl: string }[] = [];
 
+if (typeof window !== 'undefined') {
+  window.addEventListener('akari_emergency_wipe', () => {
+    MEMORY_WORKSPACE_CACHE = null;
+    MEMORY_UPLOADED_IMAGES = [];
+    MEMORY_DRAFT_RUBRIC_IMAGES = [];
+  });
+}
+
 function loadPersistedWorkspaceState(): WorkspacePersistedState {
   if (MEMORY_WORKSPACE_CACHE) {
     return MEMORY_WORKSPACE_CACHE;
   }
   if (typeof window !== 'undefined') {
     try {
-      const raw = sessionStorage.getItem(WORKSPACE_SESSION_KEY);
+      const raw =
+        localStorage.getItem(WORKSPACE_SESSION_KEY) ??
+        localStorage.getItem(LEGACY_WORKSPACE_SESSION_KEY) ??
+        sessionStorage.getItem(WORKSPACE_SESSION_KEY) ??
+        sessionStorage.getItem(LEGACY_WORKSPACE_SESSION_KEY);
       if (raw) {
         const parsed = JSON.parse(raw);
         const hydrated: WorkspacePersistedState = { ...DEFAULT_PERSISTED_STATE, ...parsed };
@@ -114,7 +127,10 @@ function savePersistedWorkspaceState(nextState: WorkspacePersistedState): void {
   MEMORY_WORKSPACE_CACHE = nextState;
   if (typeof window !== 'undefined') {
     try {
-      sessionStorage.setItem(WORKSPACE_SESSION_KEY, JSON.stringify(nextState));
+      const serialized = JSON.stringify(nextState);
+      localStorage.setItem(WORKSPACE_SESSION_KEY, serialized);
+      localStorage.setItem(LEGACY_WORKSPACE_SESSION_KEY, serialized);
+      sessionStorage.setItem(LEGACY_WORKSPACE_SESSION_KEY, serialized);
     } catch {}
   }
 }

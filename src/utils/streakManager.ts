@@ -19,7 +19,8 @@ export const INITIAL_STREAK_STATE: StreakState = {
   unlockedMilestones: [],
 };
 
-const STREAK_STORAGE_KEY = 'akari_learning_streak_v2';
+const STREAK_STORAGE_KEY = 'akari_study_streak_v1';
+const LEGACY_STREAK_STORAGE_KEY = 'akari_learning_streak_v2';
 
 export function getTodayDateString(): string {
   const now = new Date();
@@ -31,7 +32,9 @@ export function getTodayDateString(): string {
 
 export function loadStreakState(): StreakState {
   try {
-    const raw = localStorage.getItem(STREAK_STORAGE_KEY);
+    const raw =
+      localStorage.getItem(STREAK_STORAGE_KEY) ||
+      localStorage.getItem(LEGACY_STREAK_STORAGE_KEY);
     if (!raw) return INITIAL_STREAK_STATE;
     const data = JSON.parse(raw);
     const today = getTodayDateString();
@@ -73,7 +76,9 @@ export function loadStreakState(): StreakState {
 
 export function saveStreakState(state: StreakState): void {
   try {
-    localStorage.setItem(STREAK_STORAGE_KEY, JSON.stringify(state));
+    const serialized = JSON.stringify(state);
+    localStorage.setItem(STREAK_STORAGE_KEY, serialized);
+    localStorage.setItem(LEGACY_STREAK_STORAGE_KEY, serialized);
   } catch {}
 }
 

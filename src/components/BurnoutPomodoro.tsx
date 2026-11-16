@@ -60,8 +60,15 @@ import {
   type DailyRecoveryProtocol,
 } from '../services/geminiService';
 
-const DAILY_ENERGY_STATE_KEY = 'daily_energy_check_state_v2';
-const DAILY_RECOVERY_RESULT_KEY = 'daily_recovery_protocol_result_v2';
+import {
+  AKARI_FEATURE_STORAGE_KEYS,
+  AKARI_EMERGENCY_WIPE_EVENT,
+} from '../hooks/usePersistentState';
+
+const DAILY_ENERGY_STATE_KEY = AKARI_FEATURE_STORAGE_KEYS.BURNOUT_MONITOR;
+const LEGACY_DAILY_ENERGY_STATE_KEY = 'daily_energy_check_state_v2';
+const DAILY_RECOVERY_RESULT_KEY = 'akari_daily_recovery_protocol_result_v2';
+const LEGACY_DAILY_RECOVERY_RESULT_KEY = 'daily_recovery_protocol_result_v2';
 
 interface DailyEnergyCheckState {
   energyLevel: number;
@@ -94,7 +101,9 @@ function isValidDynamicProtocol(val: unknown): val is DailyRecoveryProtocol {
 function loadDailyEnergyCheckState(): DailyEnergyCheckState | null {
   if (typeof window === 'undefined') return null;
   try {
-    const raw = localStorage.getItem(DAILY_ENERGY_STATE_KEY);
+    const raw =
+      localStorage.getItem(DAILY_ENERGY_STATE_KEY) ||
+      localStorage.getItem(LEGACY_DAILY_ENERGY_STATE_KEY);
     if (!raw) return null;
     const parsed = JSON.parse(raw) as Partial<DailyEnergyCheckState>;
     if (
@@ -113,7 +122,9 @@ function loadDailyEnergyCheckState(): DailyEnergyCheckState | null {
 function loadDailyRecoveryResult(): DailyRecoveryProtocol | null {
   if (typeof window === 'undefined') return null;
   try {
-    const raw = localStorage.getItem(DAILY_RECOVERY_RESULT_KEY);
+    const raw =
+      localStorage.getItem(DAILY_RECOVERY_RESULT_KEY) ||
+      localStorage.getItem(LEGACY_DAILY_RECOVERY_RESULT_KEY);
     if (!raw) return null;
     const parsed: unknown = JSON.parse(raw);
     if (isValidDynamicProtocol(parsed)) {
@@ -128,7 +139,9 @@ function loadDailyRecoveryResult(): DailyRecoveryProtocol | null {
 function saveDailyEnergyCheckState(state: DailyEnergyCheckState): void {
   if (typeof window === 'undefined') return;
   try {
-    localStorage.setItem(DAILY_ENERGY_STATE_KEY, JSON.stringify(state));
+    const serialized = JSON.stringify(state);
+    localStorage.setItem(DAILY_ENERGY_STATE_KEY, serialized);
+    localStorage.setItem(LEGACY_DAILY_ENERGY_STATE_KEY, serialized);
   } catch {
     // Ignore storage quota errors
   }
@@ -137,7 +150,9 @@ function saveDailyEnergyCheckState(state: DailyEnergyCheckState): void {
 function saveDailyRecoveryResult(protocol: DailyRecoveryProtocol): void {
   if (typeof window === 'undefined') return;
   try {
-    localStorage.setItem(DAILY_RECOVERY_RESULT_KEY, JSON.stringify(protocol));
+    const serialized = JSON.stringify(protocol);
+    localStorage.setItem(DAILY_RECOVERY_RESULT_KEY, serialized);
+    localStorage.setItem(LEGACY_DAILY_RECOVERY_RESULT_KEY, serialized);
   } catch {
     // Ignore storage quota errors
   }
@@ -171,7 +186,7 @@ export const BurnoutPomodoro: React.FC = () => {
 
   // =========================================================================
   // OBJECTIVE CLINICAL ASSESSMENT INPUTS (Students cannot tamper with energy/stress directly)
-  // Restored instantaneously from `daily_energy_check_state` across tab navigation
+  // Restored instantaneously from `akari_burnout_monitor_v1` across tab navigation & page refreshes
   // =========================================================================
   const initialSavedEnergy = useRef<DailyEnergyCheckState | null>(loadDailyEnergyCheckState());
   const initialSavedProtocol = useRef<DailyRecoveryProtocol | null>(loadDailyRecoveryResult());
@@ -209,6 +224,33 @@ export const BurnoutPomodoro: React.FC = () => {
   // Silent dynamic model catalog warmup once on component mount (zero API spam on save)
   useEffect(() => {
     void resolveDynamicModelCatalog();
+  }, []);
+
+  // Auto-persist live input adjustments to akari_burnout_monitor_v1 so page refresh never loses slider/checkbox values
+  useEffect(() => {
+    saveDailyEnergyCheckState({
+      energyLevel: savedEnergySnapshot?.energyLevel ?? 10.0,
+      stressLevel: savedEnergySnapshot?.stressLevel ?? 0.0,
+      stage: savedEnergySnapshot?.stage ?? 'optimal',
+      studyHours,
+      sleepHours,
+      deadlinePressure,
+      symptoms,
+      savedAt: savedEnergySnapshot?.savedAt ?? new Date().toISOString(),
+    });
+  }, [studyHours, sleepHours, deadlinePressure, symptoms, savedEnergySnapshot]);
+
+  useEffect(() => {
+    const handleWipe = () => {
+      setStudyHours(0);
+      setSleepHours(0);
+      setDeadlinePressure('low');
+      setSymptoms([]);
+      setSavedEnergySnapshot(null);
+      setSavedRecoveryProtocol(null);
+    };
+    window.addEventListener(AKARI_EMERGENCY_WIPE_EVENT, handleWipe);
+    return () => window.removeEventListener(AKARI_EMERGENCY_WIPE_EVENT, handleWipe);
   }, []);
 
   // Toggle symptom checkboxes

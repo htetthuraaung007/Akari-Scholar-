@@ -35,6 +35,7 @@ export const Dashboard: React.FC<{ onOpenWorkspace?: (workspaceKey: string, card
   }, []);
 
   const [workflowFilter, setWorkflowFilter] = useState<'all' | 'writing' | 'study' | 'wellness' | 'career'>('all');
+  const [showPrivacyBanner, setShowPrivacyBanner] = useState<boolean>(true);
   const {
     language,
     setActiveTab,
@@ -62,6 +63,23 @@ export const Dashboard: React.FC<{ onOpenWorkspace?: (workspaceKey: string, card
 
   return (
     <div className="space-y-8 animate-in fade-in duration-300">
+      {/* Top Dashboard Privacy & LocalStorage Persistence Notice Banner */}
+      {showPrivacyBanner && (
+        <div className="relative flex items-start justify-between gap-4 rounded-2xl bg-slate-900/90 border border-emerald-500/30 px-4 py-3.5 sm:px-5 sm:py-4 text-xs sm:text-sm text-slate-200 shadow-lg">
+          <p className="leading-relaxed">
+            🔒 ဒေတာလုံခြုံမှုနှင့် သိမ်းဆည်းမှုဆိုင်ရာ အသိပေးချက်: သင်ထည့်သွင်းထားသော စာမူကြမ်းများ၊ အမှတ်စာရင်းများနှင့် အချက်အလက်အားလုံးကို မည်သည့်ပြင်ပ Server တွင်မျှ သိမ်းဆည်းခြင်းမရှိဘဲ သင့် Browser ၏ Local Storage တွင်သာ လုံခြုံစွာ အမြဲတမ်း မှတ်သားပေးထားပါသည်။ စာမျက်နှာကို Refresh လုပ်သော်လည်း ပျောက်ကွယ်သွားမည် မဟုတ်ပါ။ အချက်အလက်အားလုံးကို ချက်ချင်း အပြီးတိုင် ဖျက်ပစ်လိုပါက အပေါ်ဘက်ရှိ Emergency Wipe (အမှိုက်ပုံးအိုင်ကွန်) ကို နှိပ်၍ တစ်ပြိုင်နက် ရှင်းထုတ်နိုင်ပါသည်။
+          </p>
+          <button
+            type="button"
+            onClick={() => setShowPrivacyBanner(false)}
+            aria-label="Dismiss privacy notice"
+            className="shrink-0 px-2.5 py-1 rounded-lg bg-slate-800/80 hover:bg-slate-700 text-slate-400 hover:text-white text-xs font-semibold transition-colors cursor-pointer"
+          >
+            ✕
+          </button>
+        </div>
+      )}
+
       {/* Welcome & Security Banner */}
       <div className="relative overflow-hidden rounded-3xl bg-gradient-to-r from-indigo-950/80 via-slate-900 to-slate-950 border border-indigo-500/30 p-6 sm:p-8 shadow-2xl">
         <div className="absolute top-0 right-0 -mr-16 -mt-16 w-64 h-64 bg-indigo-600/10 rounded-full blur-3xl pointer-events-none" />

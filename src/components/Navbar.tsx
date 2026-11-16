@@ -190,6 +190,7 @@ export const Navbar: React.FC<NavbarProps> = ({ onOpenPrivacyModal }) => {
   const t = translations[language];
   const [showConfirmWipe, setShowConfirmWipe] = useState(false);
   const [wiping, setWiping] = useState(false);
+  const [wipeSuccessToast, setWipeSuccessToast] = useState<string | null>(null);
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [floatingPlayerStatus, setFloatingPlayerStatus] = useState<{
     isOpen: boolean;
@@ -217,12 +218,22 @@ export const Navbar: React.FC<NavbarProps> = ({ onOpenPrivacyModal }) => {
     await panicClearData();
     setWiping(false);
     setShowConfirmWipe(false);
+    setWipeSuccessToast('ဒေတာအားလုံးကို အပြီးတိုင် ရှင်းထုတ်ပြီးပါပြီ။');
+    setTimeout(() => {
+      setWipeSuccessToast(null);
+    }, 4500);
   };
 
   const isKeyActive = Boolean(hasSavedKey || apiHealth.status === 'healthy');
 
   return (
     <>
+      {wipeSuccessToast && (
+        <div className="fixed top-16 right-4 z-50 flex items-center gap-2.5 px-4 py-3 rounded-xl bg-emerald-950/95 border border-emerald-500/50 text-emerald-200 text-xs sm:text-sm font-semibold shadow-2xl animate-in fade-in slide-in-from-top-2 duration-200">
+          <span>✅</span>
+          <span>{wipeSuccessToast}</span>
+        </div>
+      )}
       <header className="sticky top-0 z-40 w-full bg-slate-900/90 border-b border-slate-800 backdrop-blur-md">
         <div className="max-w-7xl mx-auto px-4 lg:px-6 py-2.5">
           <div className="flex items-center justify-between gap-3">

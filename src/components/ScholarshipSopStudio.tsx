@@ -25,7 +25,7 @@ interface StarCvTabState {
 }
 
 const STAR_ACTIVE_TAB_KEY = 'star_studio_active_tab_v2';
-const STAR_SOP_SESSION_KEY = 'star_studio_sop_state_v2';
+const STAR_SOP_SESSION_KEY = 'akari_star_sop_v1';
 const STAR_LEADERSHIP_SESSION_KEY = 'star_studio_star_state_v2';
 const STAR_PERSONAL_SESSION_KEY = 'star_studio_personal_state_v2';
 const STAR_CV_SESSION_KEY = 'star_studio_cv_state_v2';
@@ -62,9 +62,12 @@ export const ScholarshipSopStudio: React.FC<{ onBackToDashboard?: () => void }> 
     loadPersistedTabState<StudioSection>(STAR_ACTIVE_TAB_KEY, 'sop')
   );
 
-  // Isolated Per-Tab States (Persisted in sessionStorage)
+  // Isolated Per-Tab States (Persisted in localStorage)
   const [sopState, setSopState] = useState<StarEssayTabState>(() =>
-    loadPersistedTabState<StarEssayTabState>(STAR_SOP_SESSION_KEY, DEFAULT_SOP_STATE)
+    loadPersistedTabState<StarEssayTabState>(
+      STAR_SOP_SESSION_KEY,
+      loadPersistedTabState<StarEssayTabState>('star_studio_sop_state_v2', DEFAULT_SOP_STATE)
+    )
   );
   const [starState, setStarState] = useState<StarEssayTabState>(() =>
     loadPersistedTabState<StarEssayTabState>(STAR_LEADERSHIP_SESSION_KEY, DEFAULT_STAR_STATE)
@@ -81,6 +84,18 @@ export const ScholarshipSopStudio: React.FC<{ onBackToDashboard?: () => void }> 
   const [copySuccess, setCopySuccess] = useState(false);
   const [confirmClearSection, setConfirmClearSection] = useState<StudioSection | null>(null);
   const [noticeMessage, setNoticeMessage] = useState<string | null>(null);
+
+  useEffect(() => {
+    const handleWipe = () => {
+      setActiveSection('sop');
+      setSopState(DEFAULT_SOP_STATE);
+      setStarState(DEFAULT_STAR_STATE);
+      setPersonalState(DEFAULT_PERSONAL_STATE);
+      setCvState(DEFAULT_CV_STATE);
+    };
+    window.addEventListener('akari_emergency_wipe', handleWipe);
+    return () => window.removeEventListener('akari_emergency_wipe', handleWipe);
+  }, []);
 
   useEffect(() => {
     savePersistedTabState<StudioSection>(STAR_ACTIVE_TAB_KEY, activeSection);

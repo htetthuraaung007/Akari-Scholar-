@@ -34,17 +34,36 @@ import {
   X,
   Plus,
 } from 'lucide-react';
+import { ProbationSafetyMeter } from './ProbationSafetyMeter';
+import {
+  usePersistentState,
+  AKARI_FEATURE_STORAGE_KEYS,
+  AKARI_EMERGENCY_WIPE_EVENT,
+} from '../hooks/usePersistentState';
+
+interface CgpaTrackerPersistedState {
+  terms: TermRecord[];
+  degreeTotalTarget: 120 | 60;
+  targetGpaInput: string;
+  remainingCreditsInput: string;
+  isRemainingManual: boolean;
+}
 
 function loadInitialCgpaTerms(): TermRecord[] {
   if (typeof window === 'undefined') {
     return [];
   }
-  const raw = localStorage.getItem(CGPA_HISTORY_STORAGE_KEY);
+  const raw =
+    localStorage.getItem(CGPA_HISTORY_STORAGE_KEY) ||
+    localStorage.getItem(AKARI_FEATURE_STORAGE_KEYS.CGPA_TRACKER);
   if (raw) {
     try {
       const parsed = JSON.parse(raw);
       if (Array.isArray(parsed)) {
         return parsed.map((t: TermRecord) => enrichTermWithCalendarMetadata(t));
+      }
+      if (parsed && Array.isArray(parsed.terms)) {
+        return parsed.terms.map((t: TermRecord) => enrichTermWithCalendarMetadata(t));
       }
     } catch {
       // Ignore malformed storage
@@ -56,11 +75,45 @@ function loadInitialCgpaTerms(): TermRecord[] {
 const OFFICIAL_TERM_PRESETS = buildOfficialTermPresets();
 
 export const CgpaCalculatorStudio: React.FC = () => {
-  const [terms, setTerms] = useState<TermRecord[]>(loadInitialCgpaTerms);
-  const [degreeTotalTarget, setDegreeTotalTarget] = useState<120 | 60>(120);
-  const [targetGpaInput, setTargetGpaInput] = useState('');
-  const [remainingCreditsInput, setRemainingCreditsInput] = useState('');
-  const [isRemainingManual, setIsRemainingManual] = useState(false);
+  const [trackerState, setTrackerState] = usePersistentState<CgpaTrackerPersistedState>(
+    AKARI_FEATURE_STORAGE_KEYS.CGPA_TRACKER,
+    {
+      terms: loadInitialCgpaTerms(),
+      degreeTotalTarget: 120,
+      targetGpaInput: '',
+      remainingCreditsInput: '',
+      isRemainingManual: false,
+    }
+  );
+
+  const terms = trackerState.terms;
+  const degreeTotalTarget = trackerState.degreeTotalTarget;
+  const targetGpaInput = trackerState.targetGpaInput;
+  const remainingCreditsInput = trackerState.remainingCreditsInput;
+  const isRemainingManual = trackerState.isRemainingManual;
+
+  const setTerms: React.Dispatch<React.SetStateAction<TermRecord[]>> = (updater) => {
+    setTrackerState((prev) => ({
+      ...prev,
+      terms: typeof updater === 'function' ? updater(prev.terms) : updater,
+    }));
+  };
+
+  const setDegreeTotalTarget = (next: 120 | 60) => {
+    setTrackerState((prev) => ({ ...prev, degreeTotalTarget: next }));
+  };
+
+  const setTargetGpaInput = (next: string) => {
+    setTrackerState((prev) => ({ ...prev, targetGpaInput: next }));
+  };
+
+  const setRemainingCreditsInput = (next: string) => {
+    setTrackerState((prev) => ({ ...prev, remainingCreditsInput: next }));
+  };
+
+  const setIsRemainingManual = (next: boolean) => {
+    setTrackerState((prev) => ({ ...prev, isRemainingManual: next }));
+  };
 
   // Modals & Interactive States
   const [quickPasteText, setQuickPasteText] = useState('');
@@ -91,7 +144,7 @@ export const CgpaCalculatorStudio: React.FC = () => {
     return () => clearTimeout(timer);
   }, [toast]);
 
-  // Persist entire CGPA tree under `uopeople_cgpa_history`
+  // Persist entire CGPA tree under `uopeople_cgpa_history_v1` as well for cross-component sync
   useEffect(() => {
     try {
       localStorage.setItem(CGPA_HISTORY_STORAGE_KEY, JSON.stringify(terms));
@@ -99,6 +152,21 @@ export const CgpaCalculatorStudio: React.FC = () => {
       // Ignore storage quota errors
     }
   }, [terms]);
+
+  // Reset transient inputs when Emergency Wipe occurs
+  useEffect(() => {
+    const handleWipe = () => {
+      setTrackerState({
+        terms: [],
+        degreeTotalTarget: 120,
+        targetGpaInput: '',
+        remainingCreditsInput: '',
+        isRemainingManual: false,
+      });
+    };
+    window.addEventListener(AKARI_EMERGENCY_WIPE_EVENT, handleWipe);
+    return () => window.removeEventListener(AKARI_EMERGENCY_WIPE_EVENT, handleWipe);
+  }, [setTrackerState]);
 
   // Close custom term dropdown when clicking outside
   useEffect(() => {
@@ -667,6 +735,11 @@ export const CgpaCalculatorStudio: React.FC = () => {
             </div>
           )}
         </div>
+      </div>
+
+      {/* Academic Standing & Probation Safety Meter */}
+      <div className="w-full my-6">
+        <ProbationSafetyMeter />
       </div>
 
       {/* Calendar-Linked Hybrid Term Sequence Bar */}

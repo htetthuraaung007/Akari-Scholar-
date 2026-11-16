@@ -13,7 +13,8 @@ interface PersistedWellnessState {
   anxietyAdvice: string;
 }
 
-const WELLNESS_STATE_STORAGE_KEY = 'akari_wellness_coach_state_v2';
+const WELLNESS_STATE_STORAGE_KEY = 'akari_wellness_support_v1';
+const LEGACY_WELLNESS_STATE_STORAGE_KEY = 'akari_wellness_coach_state_v2';
 let activeWellnessInFlight = false;
 
 function loadPersistedWellnessState(): PersistedWellnessState {
@@ -21,7 +22,9 @@ function loadPersistedWellnessState(): PersistedWellnessState {
     return { anxietyInput: '', selectedPreset: undefined, anxietyAdvice: '' };
   }
   try {
-    const raw = localStorage.getItem(WELLNESS_STATE_STORAGE_KEY);
+    const raw =
+      localStorage.getItem(WELLNESS_STATE_STORAGE_KEY) ||
+      localStorage.getItem(LEGACY_WELLNESS_STATE_STORAGE_KEY);
     if (!raw) return { anxietyInput: '', selectedPreset: undefined, anxietyAdvice: '' };
     const parsed = JSON.parse(raw) as Partial<PersistedWellnessState>;
     return {
@@ -37,7 +40,9 @@ function loadPersistedWellnessState(): PersistedWellnessState {
 function savePersistedWellnessState(nextState: PersistedWellnessState): void {
   if (typeof window === 'undefined') return;
   try {
-    localStorage.setItem(WELLNESS_STATE_STORAGE_KEY, JSON.stringify(nextState));
+    const serialized = JSON.stringify(nextState);
+    localStorage.setItem(WELLNESS_STATE_STORAGE_KEY, serialized);
+    localStorage.setItem(LEGACY_WELLNESS_STATE_STORAGE_KEY, serialized);
   } catch {
     // Ignore storage quota issues
   }
@@ -92,8 +97,17 @@ export const WellnessCoach: React.FC<WellnessCoachProps> = ({ language = 'my' })
     setIsLoading(activeWellnessInFlight);
     setQuotaState(checkAiQuota('wellness'));
 
+    const handleWipe = () => {
+      setAnxietyInput('');
+      setSelectedPreset(undefined);
+      setAnxietyAdvice('');
+      setAnxietyError(null);
+    };
+    window.addEventListener('akari_emergency_wipe', handleWipe);
+
     return () => {
       isMountedRef.current = false;
+      window.removeEventListener('akari_emergency_wipe', handleWipe);
     };
   }, []);
 

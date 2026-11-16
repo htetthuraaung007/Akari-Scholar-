@@ -4,6 +4,7 @@ import { translations } from '../translations';
 import { resolveLiveAcademicContext, getCurrentAcademicState, UOPEOPLE_TERMS_2026_2027, AcademicTerm } from '../utils/uopeopleCalendar';
 import { downloadTermIcs, getGoogleCalendarWebUrl } from '../utils/icsGenerator';
 import { AcademicCalendarHeader } from './AcademicCalendarHeader';
+import { usePersistentState } from '../hooks/usePersistentState';
 import {
   Calendar,
   Clock,
@@ -294,10 +295,10 @@ export const UoPeopleRhythmCalendar: React.FC = () => {
   }, [now]);
 
   // Selected Unit (1 to 9)
-  const [currentUnit, setCurrentUnit] = useState<number>(() => {
-    const saved = localStorage.getItem('uopeople_current_unit');
-    return saved ? parseInt(saved, 10) : 1;
-  });
+  const [currentUnit, setCurrentUnit] = usePersistentState<number>(
+    'uopeople_current_unit',
+    1
+  );
 
   const [showBreakPreview, setShowBreakPreview] = useState(false);
   const [showIcsModal, setShowIcsModal] = useState(false);
@@ -310,26 +311,18 @@ export const UoPeopleRhythmCalendar: React.FC = () => {
     }
   }, [academicState.activeTerm]);
 
-  // Track checked tasks
-  const [completedTasks, setCompletedTasks] = useState<Record<string, boolean>>(() => {
-    try {
-      const saved = localStorage.getItem('uopeople_completed_tasks_v1');
-      return saved ? JSON.parse(saved) : {};
-    } catch {
-      return {};
-    }
-  });
-
-  useEffect(() => {
-    localStorage.setItem('uopeople_current_unit', currentUnit.toString());
-  }, [currentUnit]);
+  // Track checked tasks with universal persistence under akari_academic_tasks_v1
+  const [completedTasks, setCompletedTasks] = usePersistentState<Record<string, boolean>>(
+    'akari_academic_tasks_v1',
+    {},
+    'uopeople_completed_tasks_v1'
+  );
 
   const toggleTask = (taskId: string) => {
-    setCompletedTasks((prev) => {
-      const updated = { ...prev, [taskId]: !prev[taskId] };
-      localStorage.setItem('uopeople_completed_tasks_v1', JSON.stringify(updated));
-      return updated;
-    });
+    setCompletedTasks((prev) => ({
+      ...prev,
+      [taskId]: !prev[taskId],
+    }));
   };
 
   const localTimezone = useMemo(() => {

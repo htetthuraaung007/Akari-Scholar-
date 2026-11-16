@@ -20,8 +20,10 @@ export interface EmergencyRescuerPersistedState {
   generatedDraft: string;
 }
 
-export const EMERGENCY_RESCUER_SESSION_KEY = 'emergency_rescuer_state_v2';
-export const APA_STUDIO_SESSION_KEY = 'apa7_word_studio_state_v2';
+export const EMERGENCY_RESCUER_SESSION_KEY = 'akari_emergency_rescuer_state_v2';
+export const LEGACY_EMERGENCY_RESCUER_KEY = 'emergency_rescuer_state_v2';
+export const APA_STUDIO_SESSION_KEY = 'akari_apa_configs_v1';
+export const LEGACY_APA_STUDIO_SESSION_KEY = 'apa7_word_studio_state_v2';
 
 export const DEFAULT_EMERGENCY_RESCUER_STATE: EmergencyRescuerPersistedState = {
   mode: 'assignment_activity',
@@ -35,6 +37,14 @@ export const DEFAULT_EMERGENCY_RESCUER_STATE: EmergencyRescuerPersistedState = {
 };
 
 let memoryEmergencyState: EmergencyRescuerPersistedState | null = null;
+let memoryApaStudioState: ApaStudioPersistedState | null = null;
+
+if (typeof window !== 'undefined') {
+  window.addEventListener('akari_emergency_wipe', () => {
+    memoryEmergencyState = null;
+    memoryApaStudioState = null;
+  });
+}
 
 export function loadEmergencyRescuerState(): EmergencyRescuerPersistedState {
   if (memoryEmergencyState) {
@@ -42,7 +52,11 @@ export function loadEmergencyRescuerState(): EmergencyRescuerPersistedState {
   }
   if (typeof window !== 'undefined') {
     try {
-      const raw = window.sessionStorage.getItem(EMERGENCY_RESCUER_SESSION_KEY);
+      const raw =
+        window.localStorage.getItem(EMERGENCY_RESCUER_SESSION_KEY) ??
+        window.localStorage.getItem(LEGACY_EMERGENCY_RESCUER_KEY) ??
+        window.sessionStorage.getItem(EMERGENCY_RESCUER_SESSION_KEY) ??
+        window.sessionStorage.getItem(LEGACY_EMERGENCY_RESCUER_KEY);
       if (raw) {
         const parsed = JSON.parse(raw) as Partial<EmergencyRescuerPersistedState>;
         const hydrated: EmergencyRescuerPersistedState = {
@@ -66,7 +80,9 @@ export function saveEmergencyRescuerState(nextState: EmergencyRescuerPersistedSt
   memoryEmergencyState = nextState;
   if (typeof window === 'undefined') return;
   try {
-    window.sessionStorage.setItem(EMERGENCY_RESCUER_SESSION_KEY, JSON.stringify(nextState));
+    const serialized = JSON.stringify(nextState);
+    window.localStorage.setItem(EMERGENCY_RESCUER_SESSION_KEY, serialized);
+    window.sessionStorage.setItem(LEGACY_EMERGENCY_RESCUER_KEY, serialized);
   } catch {
     // Quota safeguard when large base64 screenshots are attached: persist text fields without heavy images
     try {
@@ -74,7 +90,9 @@ export function saveEmergencyRescuerState(nextState: EmergencyRescuerPersistedSt
         ...nextState,
         images: [],
       };
-      window.sessionStorage.setItem(EMERGENCY_RESCUER_SESSION_KEY, JSON.stringify(leanCopy));
+      const leanSerialized = JSON.stringify(leanCopy);
+      window.localStorage.setItem(EMERGENCY_RESCUER_SESSION_KEY, leanSerialized);
+      window.sessionStorage.setItem(LEGACY_EMERGENCY_RESCUER_KEY, leanSerialized);
     } catch {
       // Memory fallback retains full images + text for active SPA session
     }
@@ -89,7 +107,10 @@ export function clearEmergencyRescuerState(): EmergencyRescuerPersistedState {
   memoryEmergencyState = emptyState;
   if (typeof window !== 'undefined') {
     try {
+      window.localStorage.removeItem(EMERGENCY_RESCUER_SESSION_KEY);
+      window.localStorage.removeItem(LEGACY_EMERGENCY_RESCUER_KEY);
       window.sessionStorage.removeItem(EMERGENCY_RESCUER_SESSION_KEY);
+      window.sessionStorage.removeItem(LEGACY_EMERGENCY_RESCUER_KEY);
     } catch {
       // Ignore storage removal errors
     }
@@ -166,8 +187,6 @@ export function createBlankApaStudioState(): ApaStudioPersistedState {
   };
 }
 
-let memoryApaStudioState: ApaStudioPersistedState | null = null;
-
 export function loadApaStudioState(): ApaStudioPersistedState {
   if (memoryApaStudioState) {
     return memoryApaStudioState;
@@ -175,7 +194,11 @@ export function loadApaStudioState(): ApaStudioPersistedState {
   const defaults = createBlankApaStudioState();
   if (typeof window !== 'undefined') {
     try {
-      const raw = window.sessionStorage.getItem(APA_STUDIO_SESSION_KEY);
+      const raw =
+        window.localStorage.getItem(APA_STUDIO_SESSION_KEY) ??
+        window.localStorage.getItem(LEGACY_APA_STUDIO_SESSION_KEY) ??
+        window.sessionStorage.getItem(APA_STUDIO_SESSION_KEY) ??
+        window.sessionStorage.getItem(LEGACY_APA_STUDIO_SESSION_KEY);
       if (raw) {
         const parsed = JSON.parse(raw) as Partial<ApaStudioPersistedState>;
         const hydrated: ApaStudioPersistedState = {
@@ -198,7 +221,10 @@ export function saveApaStudioState(nextState: ApaStudioPersistedState): void {
   memoryApaStudioState = nextState;
   if (typeof window === 'undefined') return;
   try {
-    window.sessionStorage.setItem(APA_STUDIO_SESSION_KEY, JSON.stringify(nextState));
+    const serialized = JSON.stringify(nextState);
+    window.localStorage.setItem(APA_STUDIO_SESSION_KEY, serialized);
+    window.localStorage.setItem(LEGACY_APA_STUDIO_SESSION_KEY, serialized);
+    window.sessionStorage.setItem(LEGACY_APA_STUDIO_SESSION_KEY, serialized);
   } catch {
     // Ignore storage errors
   }
@@ -208,7 +234,10 @@ export function clearApaStudioSessionStorage(): void {
   memoryApaStudioState = null;
   if (typeof window === 'undefined') return;
   try {
+    window.localStorage.removeItem(APA_STUDIO_SESSION_KEY);
+    window.localStorage.removeItem(LEGACY_APA_STUDIO_SESSION_KEY);
     window.sessionStorage.removeItem(APA_STUDIO_SESSION_KEY);
+    window.sessionStorage.removeItem(LEGACY_APA_STUDIO_SESSION_KEY);
   } catch {
     // Ignore storage removal errors
   }

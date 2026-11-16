@@ -1,5 +1,10 @@
 import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import { createPortal } from 'react-dom';
+import {
+  usePersistentState,
+  AKARI_FEATURE_STORAGE_KEYS,
+  AKARI_EMERGENCY_WIPE_EVENT,
+} from '../hooks/usePersistentState';
 
 export interface MusicTrack {
   id: string;
@@ -24,16 +29,45 @@ interface StudyAudioStudioProps {
 
 type NavSourceMode = 'ask' | 'queue' | 'history';
 
+interface PersistedPomodoroPlaylistState {
+  queue: MusicTrack[];
+  history: MusicTrack[];
+  isRepeatOne: boolean;
+  navSourceMode: NavSourceMode;
+}
+
 export const StudyAudioStudio: React.FC<StudyAudioStudioProps> = ({
   onNavigateToPomodoroTab,
   isInPomodoroWorkspace = true
 }) => {
-  // Queue & Track State (Strict Clean Zero-State on initial load)
-  const [queue, setQueue] = useState<MusicTrack[]>([]);
+  const [persistedAudio, setPersistedAudio] = usePersistentState<PersistedPomodoroPlaylistState>(
+    AKARI_FEATURE_STORAGE_KEYS.POMODORO_SETTINGS,
+    {
+      queue: [],
+      history: [],
+      isRepeatOne: false,
+      navSourceMode: 'ask',
+    }
+  );
+
+  // Queue & Track State (Persisted across refreshes via akari_pomodoro_settings_v1)
+  const queue = persistedAudio.queue;
+  const setQueue: React.Dispatch<React.SetStateAction<MusicTrack[]>> = (updater) => {
+    setPersistedAudio((prev) => ({
+      ...prev,
+      queue: typeof updater === 'function' ? updater(prev.queue) : updater,
+    }));
+  };
   const [currentTrackIndex, setCurrentTrackIndex] = useState<number>(0);
 
-  // History State (Strict Clean Zero-State on initial load)
-  const [history, setHistory] = useState<MusicTrack[]>([]);
+  // History State
+  const history = persistedAudio.history;
+  const setHistory: React.Dispatch<React.SetStateAction<MusicTrack[]>> = (updater) => {
+    setPersistedAudio((prev) => ({
+      ...prev,
+      history: typeof updater === 'function' ? updater(prev.history) : updater,
+    }));
+  };
   const [currentHistoryIndex, setCurrentHistoryIndex] = useState<number>(0);
 
   // Active Track & Strictly Stable Iframe Config
@@ -47,13 +81,37 @@ export const StudyAudioStudio: React.FC<StudyAudioStudioProps> = ({
   const [isPlaying, setIsPlaying] = useState<boolean>(false);
   const isPlayingRef = useRef<boolean>(false);
 
-  const [isRepeatOne, setIsRepeatOne] = useState<boolean>(false);
+  const isRepeatOne = persistedAudio.isRepeatOne;
+  const setIsRepeatOne: React.Dispatch<React.SetStateAction<boolean>> = (updater) => {
+    setPersistedAudio((prev) => ({
+      ...prev,
+      isRepeatOne: typeof updater === 'function' ? updater(prev.isRepeatOne) : updater,
+    }));
+  };
   const isRepeatOneRef = useRef<boolean>(false);
 
   // Next / Previous Navigation Source Mode ('ask' | 'queue' | 'history')
-  const [navSourceMode, setNavSourceMode] = useState<NavSourceMode>('ask');
+  const navSourceMode = persistedAudio.navSourceMode;
+  const setNavSourceMode: React.Dispatch<React.SetStateAction<NavSourceMode>> = (updater) => {
+    setPersistedAudio((prev) => ({
+      ...prev,
+      navSourceMode: typeof updater === 'function' ? updater(prev.navSourceMode) : updater,
+    }));
+  };
   const [pendingNavDirection, setPendingNavDirection] = useState<'prev' | 'next' | null>(null);
   const [rememberNavChoice, setRememberNavChoice] = useState<boolean>(false);
+
+  useEffect(() => {
+    const handleWipe = () => {
+      setActiveTrack(null);
+      setIframeConfig({ youtubeId: '', autoplay: 0 });
+      setIsPlaying(false);
+      setCurrentTrackIndex(0);
+      setCurrentHistoryIndex(0);
+    };
+    window.addEventListener(AKARI_EMERGENCY_WIPE_EVENT, handleWipe);
+    return () => window.removeEventListener(AKARI_EMERGENCY_WIPE_EVENT, handleWipe);
+  }, []);
 
   // Floating PiP States & Smooth Dragging (Hidden by default on launch; opens on explicit user interaction)
   const [isPipFloating, setIsPipFloating] = useState<boolean>(false);

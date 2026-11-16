@@ -553,9 +553,35 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     setSettings((prev) => ({ ...prev, ...partial }));
   };
 
-  // Panic wipe
+  // Panic wipe / Emergency Wipe Master Function
   const panicClearData = async () => {
     await clearAllLocalData();
+    if (typeof window !== 'undefined') {
+      try {
+        const keysToRemove: string[] = [];
+        for (let i = 0; i < window.localStorage.length; i++) {
+          const k = window.localStorage.key(i);
+          if (!k) continue;
+          if (
+            k.startsWith('akari_') ||
+            k.startsWith('uopeople_') ||
+            k.startsWith('matrix_') ||
+            k.startsWith('sop_') ||
+            k.startsWith('star_') ||
+            k.startsWith('socratic_') ||
+            k.startsWith('daily_')
+          ) {
+            keysToRemove.push(k);
+          }
+        }
+        keysToRemove.forEach((k) => window.localStorage.removeItem(k));
+        window.sessionStorage.clear();
+      } catch {
+        // Ignore storage errors
+      }
+      window.dispatchEvent(new CustomEvent('akari_emergency_wipe'));
+    }
+    setReadingSessions({});
     setTerms([]);
     setFlashcards([]);
     setQuizzes([]);
