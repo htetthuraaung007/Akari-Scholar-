@@ -29,7 +29,9 @@ import { useOnlineStatus } from './hooks/useOnlineStatus';
 import {
   Lock,
   WifiOff,
+  RefreshCw,
 } from 'lucide-react';
+import { APP_VERSION, purgeStaleCachesAndServiceWorkers } from './main';
 
 export type MainTabType = 'dashboard' | 'uopeople_scholar' | 'socratic' | 'originality' | 'rubric_guide' | 'quick-guide';
 
@@ -168,7 +170,66 @@ const MainLayout: React.FC = () => {
   }, [setActiveTab]);
   const t = translations[language];
   const [privacyModalOpen, setPrivacyModalOpen] = useState(false);
+  const [updateAvailable, setUpdateAvailable] = useState(false);
+  const [pendingUpdateSW, setPendingUpdateSW] = useState<((reloadPage?: boolean) => Promise<void>) | null>(null);
   const isOnline = useOnlineStatus();
+
+  useEffect(() => {
+    const handlePwaUpdate = (e: Event) => {
+      const detail = (e as CustomEvent<{ updateSW?: (reloadPage?: boolean) => Promise<void> }>).detail;
+      if (detail?.updateSW) {
+        setPendingUpdateSW(() => detail.updateSW!);
+      }
+      setUpdateAvailable(true);
+    };
+
+    const checkServerVersion = async () => {
+      try {
+        const res = await fetch(`/api/version?t=${Date.now()}`, {
+          cache: 'no-store',
+          headers: {
+            'Cache-Control': 'no-cache',
+            Pragma: 'no-cache',
+          },
+        });
+        if (!res.ok) return;
+        const data = (await res.json()) as { version?: string };
+        if (data?.version && data.version !== APP_VERSION) {
+          setUpdateAvailable(true);
+        }
+      } catch {
+        // Ignore offline or transient network errors
+      }
+    };
+
+    window.addEventListener('akari_pwa_update_available', handlePwaUpdate);
+    window.addEventListener('focus', checkServerVersion);
+    const handleVis = () => {
+      if (document.visibilityState === 'visible') {
+        void checkServerVersion();
+      }
+    };
+    document.addEventListener('visibilitychange', handleVis);
+
+    return () => {
+      window.removeEventListener('akari_pwa_update_available', handlePwaUpdate);
+      window.removeEventListener('focus', checkServerVersion);
+      document.removeEventListener('visibilitychange', handleVis);
+    };
+  }, []);
+
+  const handleApplyAppUpdate = async () => {
+    try {
+      localStorage.setItem('akari_app_version', APP_VERSION);
+      if (pendingUpdateSW) {
+        await pendingUpdateSW(true);
+      }
+      await purgeStaleCachesAndServiceWorkers();
+    } catch {
+      // ignore cleanup errors before reload
+    }
+    window.location.reload();
+  };
 
   // Workspace Card ကို နှိပ်သည့်အခါ Key အားလုံးကို တိုက်စစ်၍ လမ်းကြောင်းလွှဲပေးခြင်း
   const handleOpenWorkspace = (workspaceKey: string, cardDomId?: string) => {
@@ -362,6 +423,28 @@ const MainLayout: React.FC = () => {
         eyecareMode ? 'eyecare-mode' : ''
       } ${settings.dataSaverMode ? 'subpixel-antialiased' : 'antialiased'}`}
     >
+      {/* Top-Level Update Available Toast / Banner */}
+      {updateAvailable && (
+        <div
+          role="status"
+          className="bg-gradient-to-r from-indigo-950 via-slate-900 to-indigo-950 border-b border-indigo-500/50 px-4 py-2.5 text-xs sm:text-sm text-indigo-100 shadow-lg z-50"
+        >
+          <div className="max-w-7xl mx-auto flex flex-wrap items-center justify-between gap-3">
+            <span className="font-semibold flex items-center gap-2">
+              <span>🔄 အသစ်ထွက်ရှိသော Update ဗားရှင်းကို ရရှိနိုင်ပါပြီ။</span>
+            </span>
+            <button
+              type="button"
+              onClick={handleApplyAppUpdate}
+              className="px-3.5 py-1.5 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-extrabold transition-all flex items-center gap-1.5 shadow-md shadow-indigo-950/50 cursor-pointer whitespace-nowrap"
+            >
+              <RefreshCw className="w-3.5 h-3.5" />
+              <span>Update လုပ်မည်</span>
+            </button>
+          </div>
+        </div>
+      )}
+
       {/* Top Navbar */}
       <Navbar onOpenPrivacyModal={() => setPrivacyModalOpen(true)} />
 
