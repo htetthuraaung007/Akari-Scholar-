@@ -194,8 +194,29 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
   const [citations, setCitations] = useState<CitationItem[]>([]);
   const [burnoutLog, setBurnoutLog] = useState<BurnoutLog>(initialBurnout);
   const [settings, setSettings] = useState<UserSettings>(initialSettings);
-  const [activeTab, setActiveTab] = useState<ActiveTab>('dashboard');
+  const [activeTab, setActiveTab] = useState<ActiveTab>(() => {
+    if (typeof window === 'undefined') return 'dashboard';
+    try {
+      const savedTab =
+        window.localStorage.getItem('akari_active_tab_v1') ||
+        window.localStorage.getItem('akari_active_tab');
+      if (!savedTab || savedTab === 'home') return 'dashboard';
+      return savedTab as ActiveTab;
+    } catch {
+      return 'dashboard';
+    }
+  });
   const [isLoaded, setIsLoaded] = useState(false);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    try {
+      window.localStorage.setItem('akari_active_tab_v1', activeTab);
+      window.localStorage.setItem('akari_active_tab', activeTab);
+    } catch (err) {
+      console.warn('Failed to save active tab:', err);
+    }
+  }, [activeTab]);
 
   // Reading Sessions Persistence
   const [readingSessions, setReadingSessions] = useState<Record<string, ReadingSessionProgress>>(() => {
@@ -575,12 +596,17 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
           }
         }
         keysToRemove.forEach((k) => window.localStorage.removeItem(k));
+        window.localStorage.removeItem('akari_active_tab_v1');
+        window.localStorage.removeItem('akari_active_subview_v1');
+        window.localStorage.removeItem('akari_active_tab');
+        window.localStorage.removeItem('akari_active_workspace');
         window.sessionStorage.clear();
       } catch {
         // Ignore storage errors
       }
       window.dispatchEvent(new CustomEvent('akari_emergency_wipe'));
     }
+    setActiveTab('dashboard');
     setReadingSessions({});
     setTerms([]);
     setFlashcards([]);

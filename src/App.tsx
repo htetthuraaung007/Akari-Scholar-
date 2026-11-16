@@ -42,27 +42,94 @@ const PRIMARY_NAV_ITEMS: { id: MainTabType; label: string; icon: string }[] = [
   { id: 'quick-guide', label: 'UoPeople Quick Guide', icon: '📖' },
 ];
 
+interface PersistedSubviewState {
+  activeWorkspace: string | null;
+  lastSelectedCardId: string | null;
+  assignmentInitialModule: 'outline_suite' | 'discussion_reply' | 'paraphraser' | 'emergency_rescuer';
+}
+
+function loadInitialSubviewState(): PersistedSubviewState {
+  if (typeof window === 'undefined') {
+    return {
+      activeWorkspace: null,
+      lastSelectedCardId: null,
+      assignmentInitialModule: 'outline_suite',
+    };
+  }
+  try {
+    const raw = window.localStorage.getItem('akari_active_subview_v1');
+    if (raw) {
+      const parsed = JSON.parse(raw) as Partial<PersistedSubviewState>;
+      return {
+        activeWorkspace:
+          typeof parsed.activeWorkspace === 'string' ? parsed.activeWorkspace : null,
+        lastSelectedCardId:
+          typeof parsed.lastSelectedCardId === 'string' ? parsed.lastSelectedCardId : null,
+        assignmentInitialModule:
+          parsed.assignmentInitialModule === 'discussion_reply' ||
+          parsed.assignmentInitialModule === 'paraphraser' ||
+          parsed.assignmentInitialModule === 'emergency_rescuer'
+            ? parsed.assignmentInitialModule
+            : 'outline_suite',
+      };
+    }
+    const legacyWorkspace = window.localStorage.getItem('akari_active_workspace');
+    return {
+      activeWorkspace: legacyWorkspace || null,
+      lastSelectedCardId: null,
+      assignmentInitialModule: 'outline_suite',
+    };
+  } catch {
+    return {
+      activeWorkspace: null,
+      lastSelectedCardId: null,
+      assignmentInitialModule: 'outline_suite',
+    };
+  }
+}
+
 const MainLayout: React.FC = () => {
   const { activeTab, setActiveTab, language, settings, eyecareMode } = useApp();
   const { activeKey, primaryApiKey } = useApi();
   const hasActiveKey = Boolean(activeKey || primaryApiKey || settings.customGeminiKey);
-  const [activeWorkspace, setActiveWorkspace] = useState<string | null>(() => localStorage.getItem('akari_active_workspace'));
-  const [lastSelectedCardId, setLastSelectedCardId] = useState<string | null>(null);
+  const [initialSubview] = useState<PersistedSubviewState>(loadInitialSubviewState);
+
+  const [activeWorkspace, setActiveWorkspace] = useState<string | null>(
+    initialSubview.activeWorkspace
+  );
+  const [lastSelectedCardId, setLastSelectedCardId] = useState<string | null>(
+    initialSubview.lastSelectedCardId
+  );
   const [assignmentInitialModule, setAssignmentInitialModule] = useState<
     'outline_suite' | 'discussion_reply' | 'paraphraser' | 'emergency_rescuer'
-  >('outline_suite');
-  
-  // Persist state to localStorage on change
+  >(initialSubview.assignmentInitialModule);
+
+  // Persist active tab & sub-view states to localStorage on change
   useEffect(() => {
-    if (activeWorkspace) {
-      localStorage.setItem('akari_active_workspace', activeWorkspace);
-    } else {
-      localStorage.removeItem('akari_active_workspace');
+    try {
+      const subviewPayload: PersistedSubviewState = {
+        activeWorkspace,
+        lastSelectedCardId,
+        assignmentInitialModule,
+      };
+      localStorage.setItem('akari_active_subview_v1', JSON.stringify(subviewPayload));
+      if (activeWorkspace) {
+        localStorage.setItem('akari_active_workspace', activeWorkspace);
+      } else {
+        localStorage.removeItem('akari_active_workspace');
+      }
+    } catch (err) {
+      console.warn('Failed to save active subview:', err);
     }
-  }, [activeWorkspace]);
+  }, [activeWorkspace, lastSelectedCardId, assignmentInitialModule]);
 
   useEffect(() => {
-    localStorage.setItem('akari_active_tab', activeTab);
+    try {
+      localStorage.setItem('akari_active_tab_v1', activeTab);
+      localStorage.setItem('akari_active_tab', activeTab);
+    } catch (err) {
+      console.warn('Failed to save active tab:', err);
+    }
   }, [activeTab]);
 
   useEffect(() => {
@@ -76,11 +143,27 @@ const MainLayout: React.FC = () => {
     const handleOpenKeyModal = () => {
       setPrivacyModalOpen(true);
     };
+    const handleEmergencyWipe = () => {
+      try {
+        localStorage.removeItem('akari_active_tab_v1');
+        localStorage.removeItem('akari_active_subview_v1');
+        localStorage.removeItem('akari_active_tab');
+        localStorage.removeItem('akari_active_workspace');
+      } catch {
+        // ignore storage errors
+      }
+      setActiveWorkspace(null);
+      setLastSelectedCardId(null);
+      setAssignmentInitialModule('outline_suite');
+      setActiveTab('dashboard');
+    };
     window.addEventListener('akari_navigate_tab', handleNavigateTab);
     window.addEventListener('akari_open_api_key_modal', handleOpenKeyModal);
+    window.addEventListener('akari_emergency_wipe', handleEmergencyWipe);
     return () => {
       window.removeEventListener('akari_navigate_tab', handleNavigateTab);
       window.removeEventListener('akari_open_api_key_modal', handleOpenKeyModal);
+      window.removeEventListener('akari_emergency_wipe', handleEmergencyWipe);
     };
   }, [setActiveTab]);
   const t = translations[language];
