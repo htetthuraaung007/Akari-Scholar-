@@ -8,10 +8,9 @@ import {
   CleanExtractionResult,
 } from '../utils/cleanPdfExtractor';
 import { loadTextbookSource } from '../services/textbookLoader';
-import { getHighlightedHtml } from '../utils/smartHighlighter';
+import { cleanAcademicMarkdown, renderAcademicReaderHtml } from '../utils/readerContentCleaner';
 import { extractBookTOC, BookStructureAuditResult, BookSection } from '../services/tocScraper';
-import { executeGeminiRequest } from '../services/geminiService';
-import { safeExtractJsonObject } from '../utils/jsonSanitizer';
+import { streamReaderSynthesis } from '../services/readerAiService';
 import { DualSummaryModal } from './DualSummaryModal';
 import { ReaderQuizModal } from './ReaderQuizModal';
 import {
@@ -178,7 +177,9 @@ export const CleanPdfReader: React.FC = () => {
   const [showSummaryModal, setShowSummaryModal] = useState(false);
   const [showQuizModal, setShowQuizModal] = useState(false);
   const [summaryLoading, setSummaryLoading] = useState(false);
+  const [summaryError, setSummaryError] = useState<string | null>(null);
   const [academicSummary, setAcademicSummary] = useState<any>(initialState.academicSummary);
+  const synthesisAbortRef = useRef<AbortController | null>(null);
 
   useEffect(() => {
     savePersistedTabState<Tab1PersistedState>(TAB1_STORAGE_KEY, {
@@ -215,6 +216,10 @@ export const CleanPdfReader: React.FC = () => {
   ]);
 
   const handleClearAll = () => {
+    if (synthesisAbortRef.current) {
+      synthesisAbortRef.current.abort();
+      synthesisAbortRef.current = null;
+    }
     if (isSpeaking && typeof window !== 'undefined' && window.speechSynthesis) {
       window.speechSynthesis.cancel();
       setIsSpeaking(false);
@@ -236,6 +241,8 @@ export const CleanPdfReader: React.FC = () => {
     setChapterSearchQuery('');
     setExpandedChapters({ 1: true, 2: true, 9: true });
     setAcademicSummary(null);
+    setSummaryError(null);
+    setSummaryLoading(false);
     setShowSummaryModal(false);
     setShowQuizModal(false);
     clearPersistedTabState(TAB1_STORAGE_KEY);
@@ -342,10 +349,10 @@ export const CleanPdfReader: React.FC = () => {
     }
   };
 
-  // Load from URL using universal textbookLoader & tocScraper
+  // Load from URL using automated security-bypass textbookLoader & tocScraper
   const handleUrlFetch = async (targetUrl?: string) => {
-    const url = targetUrl || urlInput;
-    if (!url.trim()) return;
+    const url = (targetUrl || urlInput || '').trim();
+    if (!url) return;
     setErrorMessage(null);
     setLoadingDoc(true);
     setPdfFileName(url.split('/').pop() || 'Remote Textbook');
@@ -353,12 +360,7 @@ export const CleanPdfReader: React.FC = () => {
     setWebHtmlContent(null);
 
     try {
-      const [loaded, audit] = await Promise.all([
-        loadTextbookSource(url.trim()),
-        extractBookTOC(url.trim()),
-      ]);
-
-      setBookAudit(audit);
+      const loaded = await loadTextbookSource(url);
 
       if (loaded.type === 'pdf' && loaded.arrayBuffer) {
         const doc = await loadPdfDoc(loaded.arrayBuffer);
@@ -366,28 +368,45 @@ export const CleanPdfReader: React.FC = () => {
         setPersistedRuntimeObject(TAB1_PDF_OBJECT_KEY, doc);
         setTotalPages(doc.numPages);
 
+        const audit = await extractBookTOC(url, doc);
+        setBookAudit(audit);
+        if (loaded.title) setPdfFileName(loaded.title);
+
         if (audit.sections.length > 0) {
           setSelectedSection(audit.sections[0]);
           setStartPage(audit.sections[0].startPage || 1);
-          setEndPage(audit.sections[0].endPage || 20);
+          setEndPage(audit.sections[0].endPage || Math.min(20, doc.numPages));
         }
       } else if (loaded.type === 'html' && loaded.htmlContent) {
-        setWebHtmlContent(loaded.htmlContent);
+        const cleaned = cleanAcademicMarkdown(loaded.htmlContent, loaded.sourceUrl || url);
+        const finalBody = cleaned.body || loaded.htmlContent;
+        const resolvedTitle = cleaned.title || loaded.title || 'Academic Article';
+        setPdfFileName(resolvedTitle);
+
+        const audit = await extractBookTOC(url, undefined, finalBody, resolvedTitle);
+        setBookAudit(audit);
+        setWebHtmlContent(finalBody);
+
+        const words = finalBody.split(/\s+/).filter(Boolean).length;
+        const hasTable = /\|[^\n]+\|/.test(finalBody);
+
         setResult({
-          totalPages: audit.totalSections,
+          totalPages: 1,
           chapters: [],
-          fullCleanText: loaded.htmlContent,
-          totalWords: loaded.htmlContent.split(/\s+/).length,
-          estimatedReadMins: Math.ceil(loaded.htmlContent.split(/\s+/).length / 200),
-          extractedRange: { start: 1, end: audit.totalSections },
-          pages: [{ pageNum: 1, content: loaded.htmlContent, hasTable: false }],
+          fullCleanText: finalBody,
+          totalWords: words,
+          estimatedReadMins: Math.max(1, Math.round(words / 230)),
+          extractedRange: { start: 1, end: 1 },
+          pages: [{ pageNum: 1, content: finalBody, hasTable }],
         });
         if (audit.sections.length > 0) {
           setSelectedSection(audit.sections[0]);
         }
+      } else {
+        throw new Error('No readable academic content could be extracted from this URL.');
       }
     } catch (err: any) {
-      setErrorMessage(`Could not load textbook: ${err.message || 'Network blocked'}`);
+      setErrorMessage(`Could not load source: ${err?.message || 'Network or anti-bot block encountered'}`);
     } finally {
       setLoadingDoc(false);
     }
@@ -395,10 +414,25 @@ export const CleanPdfReader: React.FC = () => {
 
   const handleSectionSelect = async (section: BookSection) => {
     setSelectedSection(section);
+
+    // 1. In-page heading anchor scroll (for NCBI, Wiley, ScienceDirect, web articles)
+    if (section.urlOrAnchor && section.urlOrAnchor.startsWith('#reader-sec-')) {
+      setShowChapterDrawer(false);
+      requestAnimationFrame(() => {
+        const targetId = section.urlOrAnchor.slice(1);
+        const el = document.getElementById(targetId);
+        if (el && readingContainerRef.current) {
+          el.scrollIntoView({ behavior: 'smooth', block: 'start' });
+        }
+      });
+      return;
+    }
+
     if (readingContainerRef.current) {
       readingContainerRef.current.scrollTop = 0;
     }
 
+    // 2. Local PDF page range extraction
     if (section.startPage && section.endPage && pdfDocInstance) {
       setStartPage(section.startPage);
       setEndPage(section.endPage);
@@ -416,17 +450,35 @@ export const CleanPdfReader: React.FC = () => {
       } finally {
         setExtracting(false);
       }
-    } else if (bookAudit && bookAudit.sourceType === 'generic_web') {
-      // Simulate clean page rendering for audit section
-      setResult({
-        totalPages: bookAudit.totalSections,
-        chapters: [],
-        fullCleanText: `Section: ${section.sectionNumber} - ${section.sectionTitle}\n\nComprehensive academic content for ${section.sectionTitle}. This section covers core theoretical frameworks, empirical mechanisms, and practical examples for University of the People students.`,
-        totalWords: 1500,
-        estimatedReadMins: 7,
-        extractedRange: { start: section.startPage || 1, end: section.endPage || 20 },
-        pages: [{ pageNum: section.globalIndex, content: `Section: ${section.sectionNumber} - ${section.sectionTitle}\n\nComprehensive academic content for ${section.sectionTitle}.`, hasTable: false }],
-      });
+    } else if (
+      section.urlOrAnchor &&
+      /^https?:\/\//i.test(section.urlOrAnchor) &&
+      section.urlOrAnchor !== urlInput.trim()
+    ) {
+      // 3. OpenStax / external section URL navigation
+      setExtracting(true);
+      try {
+        const loaded = await loadTextbookSource(section.urlOrAnchor);
+        if (loaded.type === 'html' && loaded.htmlContent) {
+          const cleaned = cleanAcademicMarkdown(loaded.htmlContent, loaded.sourceUrl);
+          const finalBody = cleaned.body || loaded.htmlContent;
+          const words = finalBody.split(/\s+/).filter(Boolean).length;
+          setWebHtmlContent(finalBody);
+          setResult({
+            totalPages: 1,
+            chapters: [],
+            fullCleanText: finalBody,
+            totalWords: words,
+            estimatedReadMins: Math.max(1, Math.round(words / 230)),
+            extractedRange: { start: 1, end: 1 },
+            pages: [{ pageNum: 1, content: finalBody, hasTable: /\|[^\n]+\|/.test(finalBody) }],
+          });
+        }
+      } catch (e: any) {
+        setErrorMessage(`Could not load section: ${e?.message || 'Network error'}`);
+      } finally {
+        setExtracting(false);
+      }
     }
     setShowChapterDrawer(false);
   };
@@ -453,59 +505,34 @@ export const CleanPdfReader: React.FC = () => {
     }
   };
 
-  // AI Academic Synthesis Generator (routed via centralized executeGeminiRequest)
+  // Sub-Second Streaming AI Academic Synthesis Generator (Strict Live-Model Cache + SSE)
   const handleGenerateSynthesis = async () => {
     if (!result || !result.fullCleanText) return;
+    if (synthesisAbortRef.current) {
+      synthesisAbortRef.current.abort();
+    }
+    const controller = new AbortController();
+    synthesisAbortRef.current = controller;
+
     setSummaryLoading(true);
+    setSummaryError(null);
+    setAcademicSummary(null);
     setShowSummaryModal(true);
+
     try {
-      const excerpt = result.fullCleanText.slice(0, 12000);
       const chapterHeading = selectedSection?.sectionTitle || pdfFileName || 'Active Chapter Section';
-      const systemInstruction = `You are an elite University Professor creating Distraction-Free Study Notes and an Executive Chapter Synthesis.
-Strip any scraping metadata (e.g., Title:, URL Source:, Markdown Content:) and return ONLY a valid JSON object (no markdown fences) matching this exact structure:
-{
-  "executiveSynthesis": "Concise 3-4 sentence scholarly thesis and scope of the chapter.",
-  "studyNotesMarkdown": "### Core Theoretical Framework\\n- **Key Concept 1**: Clear definition and mechanism.\\n- **Key Concept 2**: Practical rule and academic significance.\\n\\n### Essential Definitions & Principles\\n- **Term A**: Concise scholarly definition.",
-  "coreTakeaways": [
-    { "concept": "Core Concept Name", "explanation": "Clear academic explanation and real-world relevance." }
-  ],
-  "methodologyAndMetrics": "Summary of key formulas, empirical methods, analytical rules, or evaluation criteria in this section.",
-  "selfAssessmentQuestions": [
-    "Rigorous review question 1 testing conceptual mastery?",
-    "Rigorous review question 2 testing practical application?"
-  ]
-}`;
-
-      const rawRes = await executeGeminiRequest(
-        `Chapter Title: ${chapterHeading}\n\nExtract Distraction-Free Study Notes (with ### headings and **bold core concepts**) and a structured Academic Chapter Synthesis from this text:\n\n"""\n${excerpt}\n"""`,
-        'standard',
-        systemInstruction,
-        undefined,
-        2400
-      );
-
-      const parsed = safeExtractJsonObject<any>(rawRes);
-
-      setAcademicSummary(
-        parsed || {
-          executiveSynthesis: String(rawRes || 'Academic synthesis generated successfully.'),
-          studyNotesMarkdown: `### ${chapterHeading}\n- **Core Thesis**: ${String(rawRes || '').slice(0, 350)}`,
-          coreTakeaways: [
-            { concept: 'Core Concept', explanation: 'Extracted from active textbook section.' },
-          ],
-          methodologyAndMetrics: 'Standard academic methodology and principles applied.',
-          selfAssessmentQuestions: ['What are the primary implications of this section?'],
-        }
-      );
-    } catch {
-      setAcademicSummary({
-        executiveSynthesis: 'Comprehensive academic synthesis of the active chapter section.',
-        studyNotesMarkdown:
-          '### Key Study Notes\n- **Core Framework**: Review the highlighted definitions and analytical principles in the reader view.',
-        coreTakeaways: [{ concept: 'Core Concept', explanation: 'Key theoretical framework.' }],
-        methodologyAndMetrics: 'Empirical verification and scholarly standards.',
-        selfAssessmentQuestions: ['What is the primary takeaway of this chapter section?'],
+      const finalRes = await streamReaderSynthesis({
+        chapterTitle: chapterHeading,
+        content: result.fullCleanText,
+        signal: controller.signal,
+        onProgress: (partialData) => {
+          setAcademicSummary(partialData);
+        },
       });
+      setAcademicSummary(finalRes.data);
+    } catch (err: any) {
+      if (err?.name === 'AbortError') return;
+      setSummaryError(err?.message || 'Unable to stream academic synthesis. Please verify API connectivity and retry.');
     } finally {
       setSummaryLoading(false);
     }
@@ -532,59 +559,19 @@ Strip any scraping metadata (e.g., Title:, URL Source:, Markdown Content:) and r
   // Clean scraping artifacts & repetitive meta-tags from content
   const sanitizePageContent = (raw: string) => {
     if (!raw) return { title: '', body: '' };
-    const lines = raw.split('\n');
-    let title = '';
-    const cleanLines: string[] = [];
-
-    for (const line of lines) {
-      const trimmed = line.trim();
-      if (/^Title:\s*/i.test(trimmed)) {
-        if (!title) {
-          title = trimmed.replace(/^Title:\s*/i, '').trim();
-        }
-      } else if (
-        /^(URL Source|Markdown Content|Published Time|Warning|Description|Author|Source URL|External Link):\s*/i.test(
-          trimmed
-        )
-      ) {
-        // Strip repetitive scraping metadata tags
-        continue;
-      } else {
-        cleanLines.push(line);
-      }
-    }
-
+    const cleaned = cleanAcademicMarkdown(raw, urlInput);
     return {
       title:
-        title ||
+        cleaned.title ||
         (selectedSection?.sectionTitle
           ? `${selectedSection.sectionNumber} ${selectedSection.sectionTitle}`
           : 'Chapter Reading Section'),
-      body: cleanLines
-        .join('\n')
-        .replace(/\n{3,}/g, '\n\n')
-        .trim(),
+      body: cleaned.body,
     };
   };
 
   const formatReaderHtml = (body: string, enableHighlight: boolean): string => {
-    const baseHtml = enableHighlight
-      ? getHighlightedHtml(body)
-      : body
-          .replace(/&/g, '&amp;')
-          .replace(/</g, '&lt;')
-          .replace(/>/g, '&gt;');
-
-    return baseHtml
-      .replace(
-        /^###\s+(.+)$/gm,
-        '<h3 class="text-lg font-bold font-sans text-indigo-400 mt-5 mb-2 border-b border-slate-800/50 pb-1">$1</h3>'
-      )
-      .replace(
-        /^##\s+(.+)$/gm,
-        '<h2 class="text-xl font-bold font-sans text-emerald-400 mt-6 mb-2">$1</h2>'
-      )
-      .replace(/\*\*([^*]+)\*\*/g, '<strong class="font-bold text-amber-300">$1</strong>');
+    return renderAcademicReaderHtml(body, enableHighlight, readerTheme);
   };
 
   // Flattened sections for global sequential prev/next navigation
@@ -1258,10 +1245,18 @@ Strip any scraping metadata (e.g., Title:, URL Source:, Markdown Content:) and r
           {/* AI ACADEMIC SYNTHESIS MODAL */}
           <DualSummaryModal
             isOpen={showSummaryModal}
-            onClose={() => setShowSummaryModal(false)}
+            onClose={() => {
+              if (synthesisAbortRef.current) {
+                synthesisAbortRef.current.abort();
+                synthesisAbortRef.current = null;
+              }
+              setSummaryLoading(false);
+              setShowSummaryModal(false);
+            }}
             summaryData={academicSummary}
             loading={summaryLoading}
-            chapterTitle={selectedSection?.sectionTitle || 'Chapter Section'}
+            errorMessage={summaryError}
+            chapterTitle={selectedSection?.sectionTitle || pdfFileName || 'Chapter Section'}
             onRegenerate={handleGenerateSynthesis}
           />
 
@@ -1299,13 +1294,21 @@ Strip any scraping metadata (e.g., Title:, URL Source:, Markdown Content:) and r
                     </div>
 
                     {title && title !== 'Chapter Reading Section' && (
-                      <h2 className="text-xl sm:text-2xl font-bold font-sans text-emerald-400 pb-2">
+                      <h2
+                        className={`text-xl sm:text-2xl font-bold font-sans pb-2 ${
+                          readerTheme === 'dark'
+                            ? 'text-emerald-400'
+                            : readerTheme === 'sepia'
+                            ? 'text-[#4a3518]'
+                            : 'text-emerald-700'
+                        }`}
+                      >
                         {title}
                       </h2>
                     )}
 
                     <div
-                      className="whitespace-pre-wrap leading-relaxed"
+                      className="leading-relaxed"
                       dangerouslySetInnerHTML={{
                         __html: formatReaderHtml(body, smartHighlightEnabled),
                       }}

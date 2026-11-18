@@ -1,7 +1,9 @@
 /**
  * Comprehensive Multi-Tier Textbook TOC & Structure Scraper Service
- * Ingests OpenStax, LibreTexts, Generic Web links, and PDF outlines into a strict sequential book hierarchy.
+ * Ingests OpenStax, Web Article In-Page Headings (NCBI, Wiley, etc.), and PDF outlines into a strict sequential book hierarchy.
  */
+
+import { extractHeadingsFromMarkdown } from '../utils/readerContentCleaner';
 
 export interface ValidatedSection {
   globalIndex: number;      // Continuous 1-based index (1, 2, 3 ... N across the entire book)
@@ -40,22 +42,29 @@ export interface BookStructureAuditResult {
  */
 const numericCollator = new Intl.Collator(undefined, { numeric: true, sensitivity: 'base' });
 
-export async function extractBookTOC(sourceUrlOrName: string, pdfDocInstance?: any): Promise<BookStructureAuditResult> {
+export async function extractBookTOC(
+  sourceUrlOrName: string,
+  pdfDocInstance?: any,
+  extractedContent?: string,
+  extractedTitle?: string
+): Promise<BookStructureAuditResult> {
   const source = (sourceUrlOrName || '').trim();
   let sections: ValidatedSection[] = [];
   let sourceType: BookStructureAuditResult['sourceType'] = 'generic_web';
-  let bookTitle = 'Principles of Academic Study';
+  let bookTitle = extractedTitle?.trim() || 'Academic Reading Source';
   const missingGapsDetected: string[] = [];
 
   // ==========================================
-  // PASS 1: Platform-Specific Manifest Probe (OpenStax / LibreTexts)
+  // PASS 1: Platform-Specific Manifest Probe (OpenStax)
   // ==========================================
   if (/openstax\.org/i.test(source)) {
     sourceType = 'openstax';
     try {
       const match = source.match(/\/books\/([^\/]+)/i) || source.match(/\/details\/books\/([^\/]+)/i);
       const bookSlug = match ? match[1] : 'principles-financial-accounting';
-      bookTitle = bookSlug.replace(/-/g, ' ').replace(/\b\w/g, (l) => l.toUpperCase());
+      if (!extractedTitle) {
+        bookTitle = bookSlug.replace(/-/g, ' ').replace(/\b\w/g, (l) => l.toUpperCase());
+      }
 
       const jsonEndpoint = `https://openstax.org/apps/archive/2026/contents/${bookSlug}.json`;
       const res = await fetch(`https://api.allorigins.win/raw?url=${encodeURIComponent(jsonEndpoint)}`).catch(() => null);
@@ -68,7 +77,7 @@ export async function extractBookTOC(sourceUrlOrName: string, pdfDocInstance?: a
             const chNum = cIdx + 1;
             const chTitle = ch.title || `Chapter ${chNum}`;
             const chSections = ch.sections || [];
-            
+
             chSections.forEach((sec: any, sIdx: number) => {
               const secNum = `${chNum}.${sIdx + 1}`;
               sections.push({
@@ -87,12 +96,61 @@ export async function extractBookTOC(sourceUrlOrName: string, pdfDocInstance?: a
         }
       }
     } catch (e) {
-      console.warn('OpenStax TOC manifest fetch failed, falling back to comprehensive generator:', e);
+      console.warn('OpenStax TOC manifest fetch failed, checking in-page headings:', e);
     }
   }
 
   // ==========================================
-  // PASS 4: Native PDF Outline Extraction (If PDF instance available)
+  // PASS 2: In-Page Headings Extraction (NCBI, Wiley, ScienceDirect, OpenStax pages, Web Articles)
+  // ==========================================
+  if (sections.length === 0 && extractedContent && extractedContent.trim().length > 0) {
+    sourceType = 'in_page_headings';
+    const headings = extractHeadingsFromMarkdown(extractedContent);
+
+    if (headings.length > 0) {
+      let gIndex = 1;
+      let currentChNum = 1;
+      let currentChTitle = bookTitle;
+      let secInCh = 0;
+
+      headings.forEach((h) => {
+        if (h.level <= 2 && secInCh > 0) {
+          currentChNum++;
+          currentChTitle = h.title;
+          secInCh = 1;
+        } else {
+          if (secInCh === 0 && h.level <= 2) {
+            currentChTitle = h.title;
+          }
+          secInCh++;
+        }
+
+        const secNum = `${currentChNum}.${secInCh}`;
+        sections.push({
+          globalIndex: gIndex++,
+          chapterNumber: currentChNum,
+          chapterTitle: currentChTitle,
+          sectionNumber: secNum,
+          sectionId: h.id,
+          sectionTitle: h.title,
+          urlOrAnchor: `#${h.id}`,
+        });
+      });
+    } else {
+      sections.push({
+        globalIndex: 1,
+        chapterNumber: 1,
+        chapterTitle: bookTitle,
+        sectionNumber: '1.1',
+        sectionId: 'article-overview',
+        sectionTitle: bookTitle,
+        urlOrAnchor: '#article-overview',
+      });
+    }
+  }
+
+  // ==========================================
+  // PASS 3: Native PDF Outline Extraction (If PDF instance available)
   // ==========================================
   if (pdfDocInstance && sections.length === 0) {
     sourceType = 'pdf';
@@ -129,60 +187,35 @@ export async function extractBookTOC(sourceUrlOrName: string, pdfDocInstance?: a
   }
 
   // ==========================================
-  // PASS 3 / FALLBACK: Comprehensive Accounting & Standardized Course Manifest
+  // PASS 4 / FALLBACK: Minimal Default Entry if no PDF outline or headings detected
   // ==========================================
   if (sections.length === 0) {
     sourceType = 'generic_web';
-    bookTitle = source.includes('accounting') ? 'Principles of Financial Accounting (OpenStax)' : 'Principles of Academic Study & Management';
+    bookTitle = source.includes('accounting')
+      ? 'Principles of Financial Accounting (OpenStax)'
+      : extractedTitle || 'Course Reading Document';
 
-    let gIndex = 1;
-    const chaptersData = [
-      { chNum: 1, title: 'Chapter 1: Role of Accounting in Society', count: 4 },
-      { chNum: 2, title: 'Chapter 2: The Recording Process', count: 4 },
-      { chNum: 3, title: 'Chapter 3: Adjusting Accounts', count: 5 },
-      { chNum: 4, title: 'Chapter 4: Completing the Accounting Cycle', count: 4 },
-      { chNum: 5, title: 'Chapter 5: Accounting for Merchandising Operations', count: 5 },
-      { chNum: 6, title: 'Chapter 6: Inventories', count: 4 },
-      { chNum: 7, title: 'Chapter 7: Accounting Information Systems', count: 3 },
-      { chNum: 8, title: 'Chapter 8: Fraud, Internal Control, and Cash', count: 4 },
-      { chNum: 9, title: 'Chapter 9: Current Liabilities and Payroll Accounting', count: 4 },
-      { chNum: 10, title: 'Chapter 10: Reporting and Analyzing Long-Term Liabilities', count: 4 },
-      { chNum: 11, title: 'Chapter 11: Corporations: Stockholders Equity', count: 4 },
-      { chNum: 12, title: 'Chapter 12: Statement of Cash Flows', count: 4 },
-      { chNum: 13, title: 'Chapter 13: Financial Statement Analysis', count: 4 },
-      { chNum: 14, title: 'Chapter 14: Managerial Accounting Concepts', count: 3 },
-      { chNum: 15, title: 'Chapter 15: Job Order Costing', count: 3 },
-      { chNum: 16, title: 'Chapter 16: Process Costing', count: 3 },
-    ];
-
-    chaptersData.forEach((ch) => {
-      for (let s = 1; s <= ch.count; s++) {
-        const secNum = `${ch.chNum}.${s}`;
-        let secTitle = `Core Principles of ${ch.title.replace('Chapter ', '')} - Part ${s}`;
-        if (ch.chNum === 9 && s === 1) secTitle = 'Explain the Nature and Types of Current Liabilities';
-        if (ch.chNum === 9 && s === 2) secTitle = 'Record and Account for Known Current Liabilities and Contingencies';
-        if (ch.chNum === 9 && s === 3) secTitle = 'Compute Payroll, Employee Withholdings, and Employer Payroll Taxes';
-
-        sections.push({
-          globalIndex: gIndex++,
-          chapterNumber: ch.chNum,
-          chapterTitle: ch.title,
-          sectionNumber: secNum,
-          sectionId: secNum.replace('.', '-'),
-          sectionTitle: secTitle,
-          urlOrAnchor: source,
-          wordCount: 1200,
-          startPage: (gIndex - 1) * 12,
-          endPage: gIndex * 12,
-        });
-      }
+    const totalPdfPages = pdfDocInstance?.numPages || 20;
+    sections.push({
+      globalIndex: 1,
+      chapterNumber: 1,
+      chapterTitle: bookTitle,
+      sectionNumber: '1.1',
+      sectionId: '1-1',
+      sectionTitle: 'Full Document / Reading Range',
+      urlOrAnchor: source,
+      wordCount: 1200,
+      startPage: 1,
+      endPage: Math.min(20, totalPdfPages),
     });
   }
 
   // ==========================================
   // SEQUENTIAL INTEGRITY & NATURAL SORTING AUDIT
   // ==========================================
-  sections.sort((a, b) => numericCollator.compare(a.sectionNumber, b.sectionNumber));
+  if (sourceType !== 'in_page_headings') {
+    sections.sort((a, b) => numericCollator.compare(a.sectionNumber, b.sectionNumber));
+  }
 
   sections.forEach((sec, idx) => {
     sec.globalIndex = idx + 1;
@@ -200,7 +233,9 @@ export async function extractBookTOC(sourceUrlOrName: string, pdfDocInstance?: a
     chapterMap.get(sec.chapterNumber)!.sections.push(sec);
   });
 
-  const chapters: BookChapter[] = Array.from(chapterMap.values()).sort((a, b) => a.chapterNumber - b.chapterNumber);
+  const chapters: BookChapter[] = Array.from(chapterMap.values()).sort(
+    (a, b) => a.chapterNumber - b.chapterNumber
+  );
 
   for (let i = 0; i < chapters.length - 1; i++) {
     const currentCh = chapters[i].chapterNumber;

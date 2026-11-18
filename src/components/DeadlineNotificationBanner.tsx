@@ -181,7 +181,7 @@ export const DeadlineNotificationBanner: React.FC = () => {
                     <span className="flex items-center space-x-1">
                       <Clock className="w-3.5 h-3.5 text-emerald-400" />
                       <span>
-                        {language === 'my' ? 'ဖုန်းဒေသစံတော်ချိန်:' : 'Local Time:'}{' '}
+                        {language === 'my' ? 'မိမိဒေသ စံတော်ချိန်:' : 'Local Time:'}{' '}
                         <strong className="text-emerald-300">
                           {activeAlert.localDeadlineStr}
                         </strong>

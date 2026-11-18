@@ -4,7 +4,6 @@ import { translations } from '../translations';
 import { PrivacySettingsModal } from './PrivacySettingsModal';
 import {
   sanitizePayloadText,
-  executeGeminiRequest,
   LessonAnalysisResult,
 } from '../services/geminiService';
 import { safeExtractJsonObject, safeExtractJsonArray } from '../utils/jsonSanitizer';
@@ -131,6 +130,431 @@ const LESSON_DEFAULT_STATE: LessonPersistedState = {
   generatedFlashcards: [],
 };
 
+// Unified API Key Reader from localStorage
+const getUnifiedStoredApiKey = (): string => {
+  if (typeof window === 'undefined') return '';
+  const apiKey =
+    localStorage.getItem('akari_gemini_api_key_v1') ||
+    localStorage.getItem('gemini_api_key') ||
+    '';
+  return apiKey.replace(/["'\s]/g, '').trim();
+};
+
+// In-memory session cache for confirmed generateContent models
+interface LiveModelMeta {
+  name?: string;
+  supportedGenerationMethods?: string[];
+  inputTokenLimit?: number;
+  outputTokenLimit?: number;
+}
+
+let sessionConfirmedModelsCache: { key: string; models: string[] } | null = null;
+
+function isSpecializedNonTextModel(modelId: string): boolean {
+  const lower = modelId.toLowerCase();
+  return (
+    lower.includes('embedding') ||
+    lower.includes('aqa') ||
+    lower.includes('imagen') ||
+    lower.includes('veo') ||
+    lower.includes('tts') ||
+    lower.includes('native-audio') ||
+    lower.includes('image-generation') ||
+    lower.includes('robotics') ||
+    lower.includes('computer-use') ||
+    lower.includes('deep-research')
+  );
+}
+
+function getModelEfficiencyPriority(m: LiveModelMeta): number {
+  const id = (m.name || '').replace(/^models\//, '').toLowerCase();
+  if (isSpecializedNonTextModel(id)) return 9000;
+
+  let tier = 300;
+  if (id.includes('flash-lite')) {
+    tier = 0; // Prioritize flash-lite first
+  } else if (id.includes('flash')) {
+    tier = 100; // Then flash
+  } else if (id.includes('gemini')) {
+    tier = 200; // Other Gemini text models
+  }
+
+  // Ascending token efficiency tie-breaker
+  const efficiencyOffset =
+    typeof m.outputTokenLimit === 'number' && m.outputTokenLimit > 0
+      ? Math.min(99, Math.floor(m.outputTokenLimit / 1000))
+      : 50;
+
+  return tier + efficiencyOffset;
+}
+
+async function resolveSessionConfirmedModels(apiKey: string): Promise<string[]> {
+  if (
+    sessionConfirmedModelsCache &&
+    sessionConfirmedModelsCache.key === apiKey &&
+    sessionConfirmedModelsCache.models.length > 0
+  ) {
+    return sessionConfirmedModelsCache.models;
+  }
+
+  const res = await fetch(
+    `https://generativelanguage.googleapis.com/v1beta/models?key=${encodeURIComponent(apiKey)}`,
+    {
+      method: 'GET',
+      cache: 'no-store',
+      headers: {
+        Connection: 'keep-alive',
+      },
+    }
+  );
+
+  const payload = await res.json().catch(() => null);
+  if (!res.ok) {
+    throw { status: res.status, payload };
+  }
+
+  const rawModels: LiveModelMeta[] = Array.isArray(payload?.models) ? payload.models : [];
+  const confirmed = rawModels
+    .filter(
+      (m) =>
+        typeof m?.name === 'string' &&
+        Array.isArray(m.supportedGenerationMethods) &&
+        m.supportedGenerationMethods.includes('generateContent') &&
+        !isSpecializedNonTextModel(m.name)
+    )
+    .sort((a, b) => getModelEfficiencyPriority(a) - getModelEfficiencyPriority(b))
+    .map((m) => String(m.name).replace(/^models\//, '').trim())
+    .filter(Boolean);
+
+  if (confirmed.length === 0) {
+    throw { status: 404, payload: { error: { code: 404, status: 'NOT_FOUND' } } };
+  }
+
+  sessionConfirmedModelsCache = { key: apiKey, models: confirmed };
+  return confirmed;
+}
+
+function formatBurmeseRpcError(err: unknown): { message: string; isAuthError: boolean } {
+  let status = 0;
+  let rpcStatus = '';
+  let rawMsg = '';
+
+  if (err && typeof err === 'object') {
+    const obj = err as Record<string, any>;
+    status = Number(obj.status || obj.payload?.error?.code || 0);
+    rpcStatus = String(obj.payload?.error?.status || obj.code || '');
+    rawMsg = String(obj.payload?.error?.message || obj.message || '');
+  } else if (typeof err === 'string') {
+    rawMsg = err;
+  }
+
+  if (rawMsg.trim().startsWith('{')) {
+    try {
+      const parsed = JSON.parse(rawMsg);
+      status = status || Number(parsed?.error?.code || 0);
+      rpcStatus = rpcStatus || String(parsed?.error?.status || '');
+      rawMsg = String(parsed?.error?.message || '');
+    } catch {
+      rawMsg = '';
+    }
+  }
+
+  const combined = `${status} ${rpcStatus} ${rawMsg}`.toLowerCase();
+
+  if (
+    status === 400 &&
+    (combined.includes('api key') ||
+      combined.includes('api_key_invalid') ||
+      combined.includes('invalid_argument'))
+  ) {
+    if (combined.includes('api key') || combined.includes('api_key_invalid')) {
+      return {
+        message:
+          'ထည့်သွင်းထားသော Gemini API Key မမှန်ကန်ပါ။ Settings တွင် တရားဝင် API Key ကို ပြန်လည်စစ်ဆေး ထည့်သွင်းပေးပါ။',
+        isAuthError: true,
+      };
+    }
+    return {
+      message:
+        'တောင်းဆိုမှု အချက်အလက် ပုံစံ မကိုက်ညီပါ (400)။ စာသား သို့မဟုတ် ဖိုင်အရွယ်အစားကို စစ်ဆေးပြီး ထပ်မံကြိုးစားပေးပါ။',
+      isAuthError: false,
+    };
+  }
+
+  if (
+    status === 401 ||
+    status === 403 ||
+    combined.includes('permission_denied') ||
+    combined.includes('unauthenticated')
+  ) {
+    return {
+      message:
+        'API Key ခွင့်ပြုချက် မရှိပါ (သို့မဟုတ်) ဒေသကန့်သတ်ချက် ရှိနေပါသည်။ VPN နှင့် API Key ကို စစ်ဆေးပေးပါ။',
+      isAuthError: true,
+    };
+  }
+
+  if (status === 429 || combined.includes('resource_exhausted') || combined.includes('quota')) {
+    return {
+      message:
+        'API အသုံးပြုခွင့် Quota ပြည့်သွားပါပြီ။ ခေတ္တစောင့်ဆိုင်းပြီး ထပ်မံကြိုးစားပါ သို့မဟုတ် အခြား API Key တစ်ခု ပြောင်းလဲသုံးစွဲပါ။',
+      isAuthError: false,
+    };
+  }
+
+  if (status === 404 || combined.includes('not_found')) {
+    return {
+      message:
+        'အသုံးပြုနိုင်သော AI Model ကို လောလောဆယ် ရှာမတွေ့ပါ။ Settings မှ API Key ခွင့်ပြုချက်ကို စစ်ဆေးပေးပါ။',
+      isAuthError: false,
+    };
+  }
+
+  if (
+    status === 500 ||
+    status === 503 ||
+    combined.includes('unavailable') ||
+    combined.includes('overloaded')
+  ) {
+    return {
+      message:
+        'AI ဆာဗာ ယာယီအလုပ်များနေပါသည်။ စက္ကန့်အနည်းငယ်အကြာတွင် ထပ်မံကြိုးစားပေးပါ။',
+      isAuthError: false,
+    };
+  }
+
+  if (
+    combined.includes('failed to fetch') ||
+    combined.includes('networkerror') ||
+    combined.includes('network')
+  ) {
+    return {
+      message:
+        'အင်တာနက် ချိတ်ဆက်မှု အဆင်မပြေပါ။ ကွန်ရက် သို့မဟုတ် VPN ကို စစ်ဆေးပြီး ထပ်မံကြိုးစားပေးပါ။',
+      isAuthError: false,
+    };
+  }
+
+  return {
+    message:
+      'သင်ခန်းစာ ခွဲခြမ်းစိတ်ဖြာရာတွင် အမှားအယွင်း ဖြစ်ပေါ်ခဲ့ပါသည်။ ကျေးဇူးပြု၍ ထပ်မံကြိုးစားပေးပါ။',
+    isAuthError: false,
+  };
+}
+
+function extractReadableStreamPreview(accumulated: string): string {
+  const trimmed = accumulated.trim();
+  if (!trimmed) return '';
+  if (!trimmed.startsWith('{')) return accumulated;
+
+  const decodeJsonStr = (s: string) =>
+    s
+      .replace(/\\n/g, '\n')
+      .replace(/\\"/g, '"')
+      .replace(/\\\\/g, '\\');
+
+  const extractField = (fieldName: string): string => {
+    const regex = new RegExp(`"${fieldName}"\\s*:\\s*"((?:\\\\.|[^"\\\\])*)`);
+    const match = trimmed.match(regex);
+    return match ? decodeJsonStr(match[1]) : '';
+  };
+
+  const title = extractField('analysisTitle');
+  const burmese = extractField('comprehensiveExplanation');
+  const english = extractField('executiveSynthesis');
+
+  const sections: string[] = [];
+  if (title) sections.push(`# ${title}`);
+  if (burmese) sections.push(burmese);
+  else if (english) sections.push(english);
+
+  return sections.join('\n\n') || '### ⏳ AI ဖြင့် စတင်ခွဲခြမ်းစိတ်ဖြာနေပါသည်...';
+}
+
+async function streamDynamicGeminiContent(options: {
+  apiKey: string;
+  prompt: string;
+  systemInstruction: string;
+  imagePayload?: Array<{ name: string; dataUrl: string }>;
+  maxOutputTokens?: number;
+  responseMimeType?: string;
+  onChunk?: (accumulatedText: string) => void;
+}): Promise<string> {
+  const confirmedModels = await resolveSessionConfirmedModels(options.apiKey);
+
+  const parts: Array<Record<string, any>> = [];
+  if (options.imagePayload && options.imagePayload.length > 0) {
+    for (const img of options.imagePayload) {
+      const match = img.dataUrl.match(/^data:([^;]+);base64,(.+)$/);
+      if (match) {
+        parts.push({
+          inlineData: {
+            mimeType: match[1],
+            data: match[2],
+          },
+        });
+      }
+    }
+  }
+  parts.push({ text: options.prompt });
+
+  let lastErr: unknown = null;
+
+  for (const modelName of confirmedModels) {
+    try {
+      const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(
+        modelName
+      )}:streamGenerateContent?alt=sse&key=${encodeURIComponent(options.apiKey)}`;
+
+      const res = await fetch(endpoint, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Connection: 'keep-alive',
+        },
+        body: JSON.stringify({
+          systemInstruction: {
+            parts: [{ text: options.systemInstruction }],
+          },
+          contents: [
+            {
+              role: 'user',
+              parts,
+            },
+          ],
+          generationConfig: {
+            maxOutputTokens: options.maxOutputTokens || 3600,
+            temperature: 0.35,
+            ...(options.responseMimeType ? { responseMimeType: options.responseMimeType } : {}),
+          },
+        }),
+      });
+
+      if (!res.ok) {
+        const errPayload = await res.json().catch(() => null);
+        const errObj = { status: res.status, payload: errPayload };
+        const errMsg = String(errPayload?.error?.message || '').toLowerCase();
+        const isKeyError =
+          res.status === 401 ||
+          res.status === 403 ||
+          (res.status === 400 && (errMsg.includes('api key') || errMsg.includes('api_key_invalid')));
+
+        if (isKeyError) {
+          throw errObj;
+        }
+        lastErr = errObj;
+        continue;
+      }
+
+      if (!res.body) {
+        const fullText = await res.text();
+        let accumulated = '';
+        for (const line of fullText.split('\n')) {
+          const trimmedLine = line.trim();
+          if (!trimmedLine.startsWith('data:')) continue;
+          const jsonStr = trimmedLine.slice(5).trim();
+          if (!jsonStr || jsonStr === '[DONE]') continue;
+          try {
+            const parsed = JSON.parse(jsonStr);
+            const chunkParts = parsed?.candidates?.[0]?.content?.parts;
+            if (Array.isArray(chunkParts)) {
+              for (const p of chunkParts) {
+                if (typeof p?.text === 'string' && !p?.thought) {
+                  accumulated += p.text;
+                }
+              }
+            }
+          } catch {
+            // Skip malformed SSE line
+          }
+        }
+        if (accumulated) {
+          options.onChunk?.(accumulated);
+          return accumulated;
+        }
+        continue;
+      }
+
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder('utf-8');
+      let buffer = '';
+      let accumulated = '';
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split('\n');
+        buffer = lines.pop() || '';
+
+        for (const line of lines) {
+          const trimmedLine = line.trim();
+          if (!trimmedLine.startsWith('data:')) continue;
+          const jsonStr = trimmedLine.slice(5).trim();
+          if (!jsonStr || jsonStr === '[DONE]') continue;
+
+          try {
+            const parsed = JSON.parse(jsonStr);
+            const chunkParts = parsed?.candidates?.[0]?.content?.parts;
+            if (Array.isArray(chunkParts)) {
+              let chunkDelta = '';
+              for (const p of chunkParts) {
+                if (typeof p?.text === 'string' && !p?.thought) {
+                  chunkDelta += p.text;
+                }
+              }
+              if (chunkDelta) {
+                accumulated += chunkDelta;
+                options.onChunk?.(accumulated);
+              }
+            }
+          } catch {
+            // Partial JSON chunk ignored until complete line arrives
+          }
+        }
+      }
+
+      if (buffer.trim().startsWith('data:')) {
+        const jsonStr = buffer.trim().slice(5).trim();
+        if (jsonStr && jsonStr !== '[DONE]') {
+          try {
+            const parsed = JSON.parse(jsonStr);
+            const chunkParts = parsed?.candidates?.[0]?.content?.parts;
+            if (Array.isArray(chunkParts)) {
+              for (const p of chunkParts) {
+                if (typeof p?.text === 'string' && !p?.thought) {
+                  accumulated += p.text;
+                }
+              }
+              options.onChunk?.(accumulated);
+            }
+          } catch {
+            // Ignore trailing partial
+          }
+        }
+      }
+
+      if (accumulated.trim().length > 0) {
+        return accumulated;
+      }
+    } catch (err: any) {
+      const status = Number(err?.status || 0);
+      const errMsg = String(err?.payload?.error?.message || '').toLowerCase();
+      if (
+        status === 401 ||
+        status === 403 ||
+        (status === 400 && (errMsg.includes('api key') || errMsg.includes('api_key_invalid')))
+      ) {
+        throw err;
+      }
+      lastErr = err;
+    }
+  }
+
+  throw lastErr || { status: 503, payload: { error: { code: 503, status: 'UNAVAILABLE' } } };
+}
+
 export const LessonExplainer: React.FC = () => {
   const { language, addFlashcards, addQuizzes, setActiveTab } = useApp();
   const t = translations[language];
@@ -169,7 +593,7 @@ export const LessonExplainer: React.FC = () => {
   const [copied, setCopied] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [showPrivacyModal, setShowPrivacyModal] = useState(false);
-  const [apiKeyMissingNotice, setApiKeyMissingNotice] = useState(false);
+  const [apiKeyMissingNotice, setApiKeyMissingNotice] = useState<boolean>(() => !getUnifiedStoredApiKey());
 
   // Active Output View Tab: 'burmese' | 'english'
   const [activeOutputTab, setActiveOutputTab] = useState<'burmese' | 'english'>(
@@ -180,6 +604,21 @@ export const LessonExplainer: React.FC = () => {
   const [highlightEnabled, setHighlightEnabled] = useState(true);
   const [highlightColor, setHighlightColor] = useState<HighlightColor>('amber');
   const [filterConcept, setFilterConcept] = useState<string | null>(null);
+
+  // Keep API key banner synced with localStorage without triggering pre-flight calls
+  useEffect(() => {
+    const syncKeyBanner = () => {
+      const hasKey = Boolean(getUnifiedStoredApiKey());
+      setApiKeyMissingNotice(!hasKey);
+    };
+    syncKeyBanner();
+    window.addEventListener('storage', syncKeyBanner);
+    window.addEventListener('focus', syncKeyBanner);
+    return () => {
+      window.removeEventListener('storage', syncKeyBanner);
+      window.removeEventListener('focus', syncKeyBanner);
+    };
+  }, []);
 
   useEffect(() => {
     // Avoid exceeding sessionStorage quota with huge base64 image payloads if needed
@@ -267,7 +706,7 @@ export const LessonExplainer: React.FC = () => {
     setSelectedAnswers({});
     setShowQuizPreview(false);
     setFilterConcept(null);
-    setApiKeyMissingNotice(false);
+    setApiKeyMissingNotice(!getUnifiedStoredApiKey());
     clearPersistedTabState(LESSON_STORAGE_KEY);
   };
 
@@ -308,12 +747,12 @@ export const LessonExplainer: React.FC = () => {
       }
     } catch (err: any) {
       console.error('File parsing error:', err);
-      setErrorMessage(
-        err?.message ||
-          (language === 'my'
-            ? 'ဖိုင်မှ အချက်အလက် ထုတ်ယူရာတွင် အမှားအယွင်း ဖြစ်ပေါ်ခဲ့ပါသည်။'
-            : 'Failed to extract text from document.')
-      );
+      const errText = typeof err?.message === 'string' && !err.message.trim().startsWith('{')
+        ? err.message
+        : language === 'my'
+        ? 'ဖိုင်မှ အချက်အလက် ထုတ်ယူရာတွင် အမှားအယွင်း ဖြစ်ပေါ်ခဲ့ပါသည်။'
+        : 'Failed to extract text from document.';
+      setErrorMessage(errText);
     } finally {
       setExtractingDocument(false);
     }
@@ -381,12 +820,25 @@ At 20 units sold, total revenue ($500) equals total cost ($500), resulting in $0
     );
   };
 
-  // Action A: Bilingual Lesson Explainer routed through centralized executeGeminiRequest ('standard')
+  // Action A: Bilingual Lesson Explainer via Under-the-Hood Dynamic Model Resolution & Streaming
   const handleExplain = async () => {
     const hasText = lessonContent.trim().length > 0;
     const hasImage = Boolean(attachedDocument?.imageBase64);
 
     if ((!hasText && !hasImage) || isExceeded) return;
+
+    const apiKey = (
+      localStorage.getItem('akari_gemini_api_key_v1') ||
+      localStorage.getItem('gemini_api_key') ||
+      ''
+    )
+      .replace(/["'\s]/g, '')
+      .trim();
+
+    if (!apiKey) {
+      setApiKeyMissingNotice(true);
+      return;
+    }
 
     setErrorMessage(null);
     setApiKeyMissingNotice(false);
@@ -443,16 +895,17 @@ ${sanitizedPayload || 'Analyze the attached lecture slide or study image thoroug
         ? [{ name: attachedDocument.fileName || 'lesson_slide', dataUrl: attachedDocument.imageBase64 }]
         : undefined;
 
-      const rawRes = await executeGeminiRequest(
+      const rawRes = await streamDynamicGeminiContent({
+        apiKey,
         prompt,
-        'standard',
         systemInstruction,
         imagePayload,
-        3600,
-        undefined,
-        false,
-        'application/json'
-      );
+        maxOutputTokens: 3600,
+        responseMimeType: 'application/json',
+        onChunk: (accumulatedText) => {
+          setRawTextResult(extractReadableStreamPreview(accumulatedText));
+        },
+      });
 
       const parsed = safeExtractJsonObject<any>(rawRes);
       if (parsed && (parsed.burmeseAnalysis || parsed.englishAnalysis || parsed.analysisTitle)) {
@@ -488,20 +941,16 @@ ${sanitizedPayload || 'Analyze the attached lecture slide or study image thoroug
           },
         };
         setParsedData(normalized);
+        setRawTextResult('');
       } else {
-        setRawTextResult(String(rawRes || ''));
+        setRawTextResult(extractReadableStreamPreview(String(rawRes || '')));
       }
-    } catch (err: any) {
+    } catch (err: unknown) {
       console.error('Lesson explainer error:', err);
-      const msg = err?.message || 'Failed to analyze lesson content';
-      setErrorMessage(msg);
-      if (
-        msg.includes('No Gemini API Key') ||
-        msg.includes('INVALID_KEY') ||
-        msg.includes('API key not valid') ||
-        msg.includes('403') ||
-        msg.includes('API Key')
-      ) {
+      const { message, isAuthError } = formatBurmeseRpcError(err);
+      setRawTextResult('');
+      setErrorMessage(message);
+      if (isAuthError) {
         setApiKeyMissingNotice(true);
       }
     } finally {
@@ -509,10 +958,25 @@ ${sanitizedPayload || 'Analyze the attached lecture slide or study image thoroug
     }
   };
 
-  // Action B: UoPeople Tricky Quiz (10 Questions) & Flashcards via executeGeminiRequest ('light')
+  // Action B: UoPeople Tricky Quiz (10 Questions) & Flashcards via Dynamic Model Resolution
   const handleGenerateCardsAndQuiz = async () => {
     if ((!lessonContent.trim() && !parsedData && !rawTextResult) || isExceeded) return;
+
+    const apiKey = (
+      localStorage.getItem('akari_gemini_api_key_v1') ||
+      localStorage.getItem('gemini_api_key') ||
+      ''
+    )
+      .replace(/["'\s]/g, '')
+      .trim();
+
+    if (!apiKey) {
+      setApiKeyMissingNotice(true);
+      return;
+    }
+
     setErrorMessage(null);
+    setApiKeyMissingNotice(false);
     setGeneratingCards(true);
     setCardsGeneratedSuccess(false);
 
@@ -558,16 +1022,13 @@ Requirements:
 
       const quizPrompt = `Generate EXACTLY 10 UoPeople-style tricky practice questions (with rationale explanations) and 8-10 key term flashcards from this course material:\n\n"""\n${source}\n"""`;
 
-      const rawRes = await executeGeminiRequest(
-        quizPrompt,
-        'light',
+      const rawRes = await streamDynamicGeminiContent({
+        apiKey,
+        prompt: quizPrompt,
         systemInstruction,
-        undefined,
-        3600,
-        undefined,
-        true,
-        'application/json'
-      );
+        maxOutputTokens: 3600,
+        responseMimeType: 'application/json',
+      });
 
       let parsedObj = safeExtractJsonObject<any>(rawRes);
       if (!parsedObj) {
@@ -625,8 +1086,12 @@ Requirements:
       setSelectedAnswers({});
       setShowQuizPreview(true);
       setCardsGeneratedSuccess(true);
-    } catch (err: any) {
-      setErrorMessage(err?.message || 'Failed to generate UoPeople Quiz & Flashcards');
+    } catch (err: unknown) {
+      const { message, isAuthError } = formatBurmeseRpcError(err);
+      setErrorMessage(message);
+      if (isAuthError) {
+        setApiKeyMissingNotice(true);
+      }
     } finally {
       setGeneratingCards(false);
     }
@@ -864,16 +1329,17 @@ Requirements:
 
       {/* Error Message Alert */}
       {errorMessage && (
-        <div className="flex items-center justify-between p-3.5 rounded-xl bg-rose-500/10 border border-rose-500/30 text-rose-300 text-xs sm:text-sm animate-in fade-in">
-          <div className="flex items-center space-x-2">
+        <div className="flex items-center justify-between p-4 rounded-xl bg-rose-500/15 border border-rose-500/40 text-rose-200 text-xs sm:text-sm animate-in fade-in shadow-sm">
+          <div className="flex items-center space-x-2.5">
             <AlertCircle className="w-4 h-4 text-rose-400 shrink-0" />
-            <span>{errorMessage}</span>
+            <span className="font-sans leading-relaxed">{errorMessage}</span>
           </div>
           <button
+            type="button"
             onClick={() => setErrorMessage(null)}
-            className="ml-3 px-2 py-0.5 rounded bg-rose-500/20 hover:bg-rose-500/30 text-rose-200 text-xs font-semibold cursor-pointer"
+            className="ml-3 px-2.5 py-1 rounded-lg bg-rose-500/20 hover:bg-rose-500/30 text-rose-100 text-xs font-semibold cursor-pointer shrink-0 transition-colors"
           >
-            Dismiss
+            {language === 'my' ? 'ပိတ်မည်' : 'Dismiss'}
           </button>
         </div>
       )}
@@ -1415,7 +1881,7 @@ Requirements:
           )}
 
           {/* Content Render Area */}
-          {loading ? (
+          {loading && !rawTextResult ? (
             <div className="flex-1 flex flex-col items-center justify-center space-y-3 py-16 text-slate-400">
               <div className="w-9 h-9 border-2 border-emerald-500 border-t-transparent rounded-full animate-spin" />
               <p className="text-xs font-medium text-center max-w-xs">
@@ -1553,7 +2019,17 @@ Requirements:
               )}
             </div>
           ) : rawTextResult ? (
-            <div className="flex-1 overflow-y-auto max-h-[580px] pr-2 text-xs sm:text-sm text-slate-200 leading-relaxed font-sans">
+            <div className="flex-1 overflow-y-auto max-h-[580px] pr-2 text-xs sm:text-sm text-slate-200 leading-relaxed font-sans space-y-3">
+              {loading && (
+                <div className="flex items-center space-x-2 text-xs text-emerald-400 font-medium pb-2 border-b border-slate-800/70">
+                  <div className="w-3.5 h-3.5 border-2 border-emerald-400 border-t-transparent rounded-full animate-spin shrink-0" />
+                  <span>
+                    {language === 'my'
+                      ? 'ရှင်းလင်းချက်ကို တိုက်ရိုက်ထုတ်ပေးနေပါသည်...'
+                      : 'Streaming explanation live...'}
+                  </span>
+                </div>
+              )}
               {renderMathAndText(rawTextResult)}
             </div>
           ) : (
@@ -1572,7 +2048,10 @@ Requirements:
       {/* Privacy & BYOK Settings Modal */}
       <PrivacySettingsModal
         isOpen={showPrivacyModal}
-        onClose={() => setShowPrivacyModal(false)}
+        onClose={() => {
+          setShowPrivacyModal(false);
+          setApiKeyMissingNotice(!getUnifiedStoredApiKey());
+        }}
       />
     </div>
   );

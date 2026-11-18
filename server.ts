@@ -3065,6 +3065,635 @@ app.post('/api/youtube/search', async (req: Request, res: Response): Promise<voi
   }
 });
 
+// =========================================================================
+// READER & SYNTHESIS MODULE: ANTI-BOT EXTRACTION & STRICT STREAMING GEMINI
+// =========================================================================
+
+const readerModelCache = new Map<string, { models: string[]; timestamp: number }>();
+const READER_MODEL_CACHE_TTL_MS = 60 * 60 * 1000; // 1 hour session cache
+
+function getReaderKeyFingerprint(key: string): string {
+  return key ? key.slice(-8) : 'env_default';
+}
+
+function isExcludedReaderModel(rawName: string): boolean {
+  const lower = rawName.toLowerCase();
+  const excludedTokens = [
+    'embedding',
+    'gecko',
+    'aqa',
+    'bison',
+    'text-bison',
+    'chat-bison',
+    '1.0',
+    '1.5',
+    'tts',
+    'audio',
+    'live',
+    'transcribe',
+    'image',
+    'imagen',
+    'veo',
+    'lyria',
+    'omni',
+    'vision',
+    'moderation',
+    'robotics',
+    'computer-use',
+    'deep-research',
+    'customtools',
+    'gemma',
+    'nano',
+    'learnlm',
+    'exp',
+    'latest',
+    'carbon',
+    'ultra',
+  ];
+  if (lower === 'gemini-pro') return true;
+  return excludedTokens.some((tok) => lower.includes(tok));
+}
+
+function getReaderModelPriorityRank(rawName: string): number {
+  const lower = rawName.toLowerCase();
+  if (lower.includes('flash-lite') || lower.includes('-lite') || lower.includes('8b')) {
+    return 1; // Priority 1: Flash-lite models
+  }
+  if (lower.includes('flash') || lower.includes('hydrogen')) {
+    return 2; // Priority 2: Flash models
+  }
+  return 3; // Priority 3: Standard generation models
+}
+
+async function discoverVerifiedReaderModels(apiKey: string, forceRefresh = false): Promise<string[]> {
+  const fingerprint = getReaderKeyFingerprint(apiKey);
+  const existing = readerModelCache.get(fingerprint);
+  if (
+    !forceRefresh &&
+    existing &&
+    existing.models.length > 0 &&
+    Date.now() - existing.timestamp < READER_MODEL_CACHE_TTL_MS
+  ) {
+    return existing.models;
+  }
+
+  // A. One-Time Live Fetch from v1beta/models
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 8000);
+  try {
+    const res = await fetch(
+      `https://generativelanguage.googleapis.com/v1beta/models?key=${encodeURIComponent(apiKey)}`,
+      {
+        method: 'GET',
+        signal: controller.signal,
+        headers: { 'User-Agent': 'aistudio-build' },
+      }
+    );
+    clearTimeout(timer);
+
+    if (!res.ok) {
+      const errText = await res.text().catch(() => '');
+      throw new Error(`v1beta/models returned HTTP ${res.status}: ${errText.slice(0, 150)}`);
+    }
+
+    const data: any = await res.json();
+    const rawModels: any[] = Array.isArray(data?.models) ? data.models : [];
+
+    // B. Strict Filtering: supportedGenerationMethods includes 'generateContent', exclude embedding/audio/legacy
+    const verified = rawModels
+      .filter((m) => {
+        const methods: unknown = m?.supportedGenerationMethods;
+        if (!Array.isArray(methods) || !methods.includes('generateContent')) {
+          return false;
+        }
+        const name = String(m?.name || '').replace(/^models\//, '').trim();
+        if (!name || isExcludedReaderModel(name)) {
+          return false;
+        }
+        return true;
+      })
+      .map((m) => String(m.name).replace(/^models\//, '').trim());
+
+    // D. Ascending Token Efficiency Sorting: Priority 1 Flash-lite -> Priority 2 Flash -> Priority 3 Standard
+    const uniqueSorted = Array.from(new Set(verified)).sort((a, b) => {
+      const rankDiff = getReaderModelPriorityRank(a) - getReaderModelPriorityRank(b);
+      if (rankDiff !== 0) return rankDiff;
+      return b.localeCompare(a);
+    });
+
+    if (uniqueSorted.length > 0) {
+      // E. In-Memory Session Caching
+      readerModelCache.set(fingerprint, {
+        models: uniqueSorted,
+        timestamp: Date.now(),
+      });
+    }
+
+    return uniqueSorted;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+function evictReaderModelFromCache(apiKey: string, badModel: string): void {
+  const fingerprint = getReaderKeyFingerprint(apiKey);
+  const existing = readerModelCache.get(fingerprint);
+  if (existing) {
+    readerModelCache.set(fingerprint, {
+      models: existing.models.filter((m) => m !== badModel),
+      timestamp: existing.timestamp,
+    });
+  }
+}
+
+app.get('/api/reader/models', async (req: Request, res: Response): Promise<void> => {
+  try {
+    const candidateKeys = getCandidateServerKeys(req);
+    const strictKeyHeader = req.headers['x-strict-key'] === '1';
+    const rawHeaderKey = (
+      (req.headers['x-gemini-key'] as string | undefined) ||
+      (req.headers['x-goog-api-key'] as string | undefined) ||
+      ''
+    )
+      .replace(/["'\s]/g, '')
+      .trim();
+    const apiKey = strictKeyHeader && rawHeaderKey.length >= 10 ? rawHeaderKey : candidateKeys[0] || '';
+
+    if (!apiKey) {
+      res.status(400).json({ error: 'API key is not configured.', models: [] });
+      return;
+    }
+
+    const models = await discoverVerifiedReaderModels(apiKey, req.query.refresh === '1');
+    res.json({ models, cached: true });
+  } catch (err: any) {
+    res.status(500).json({ error: err?.message || 'Failed to fetch verified models', models: [] });
+  }
+});
+
+app.post('/api/reader/stream', async (req: Request, res: Response): Promise<void> => {
+  try {
+    const { prompt, systemInstruction, maxOutputTokens, preferredModels } = req.body || {};
+    if (!prompt || typeof prompt !== 'string') {
+      res.status(400).json({ error: 'Prompt is required.' });
+      return;
+    }
+
+    const candidateKeys = getCandidateServerKeys(req);
+    const strictKeyHeader = req.headers['x-strict-key'] === '1';
+    const rawHeaderKey = (
+      (req.headers['x-gemini-key'] as string | undefined) ||
+      (req.headers['x-goog-api-key'] as string | undefined) ||
+      ''
+    )
+      .replace(/["'\s]/g, '')
+      .trim();
+
+    const effectiveKeys =
+      strictKeyHeader && rawHeaderKey.length >= 10 ? [rawHeaderKey] : candidateKeys;
+
+    if (effectiveKeys.length === 0) {
+      res.status(400).json({ error: 'No Gemini API key configured.' });
+      return;
+    }
+
+    let stream: any = null;
+    let activeModelUsed = '';
+    let lastErr: any = null;
+
+    for (const apiKey of effectiveKeys) {
+      let verifiedModels: string[] = [];
+      try {
+        verifiedModels = await discoverVerifiedReaderModels(apiKey);
+      } catch (discErr: any) {
+        lastErr = discErr;
+        continue;
+      }
+
+      if (verifiedModels.length === 0) {
+        continue;
+      }
+
+      // C. Zero 404 Attempt: Only allow models strictly present in confirmed active live list
+      const verifiedSet = new Set(verifiedModels);
+      const clientPreferred = Array.isArray(preferredModels)
+        ? preferredModels.filter((m: any) => typeof m === 'string' && verifiedSet.has(m))
+        : [];
+      const orderedModels =
+        clientPreferred.length > 0
+          ? [...clientPreferred, ...verifiedModels.filter((m) => !clientPreferred.includes(m))]
+          : verifiedModels;
+
+      const ai = new GoogleGenAI({
+        apiKey,
+        httpOptions: {
+          headers: { 'User-Agent': 'aistudio-build' },
+          timeout: 45000,
+        },
+      });
+
+      for (const model of orderedModels) {
+        try {
+          const lower = model.toLowerCase();
+          const isLite = lower.includes('flash-lite') || lower.includes('-lite') || lower.includes('8b');
+          const isGemini3Or4 =
+            lower.includes('gemini-3') ||
+            lower.includes('gemini-4') ||
+            lower.includes('hydrogen') ||
+            lower.includes('argon');
+
+          const config: Record<string, any> = {};
+          if (systemInstruction) {
+            config.systemInstruction = String(systemInstruction);
+          }
+          if (typeof maxOutputTokens === 'number' && maxOutputTokens > 0) {
+            config.maxOutputTokens = maxOutputTokens;
+          }
+          if (isGemini3Or4) {
+            config.thinkingConfig = {
+              thinkingLevel: isLite ? ThinkingLevel.MINIMAL : ThinkingLevel.LOW,
+            };
+          }
+
+          try {
+            stream = await ai.models.generateContentStream({
+              model,
+              contents: prompt,
+              config,
+            });
+          } catch (innerErr: any) {
+            const innerMsg = String(innerErr?.message || innerErr || '').toLowerCase();
+            if (innerMsg.includes('thinking') && config.thinkingConfig) {
+              delete config.thinkingConfig;
+              stream = await ai.models.generateContentStream({
+                model,
+                contents: prompt,
+                config,
+              });
+            } else {
+              throw innerErr;
+            }
+          }
+
+          if (stream) {
+            activeModelUsed = model;
+            break;
+          }
+        } catch (err: any) {
+          lastErr = err;
+          const msg = String(err?.message || err || '');
+          if (msg.includes('404') || msg.includes('NOT_FOUND')) {
+            evictReaderModelFromCache(apiKey, model);
+          }
+          if (msg.includes('API_KEY_INVALID') || msg.includes('API key not valid') || msg.includes('PERMISSION_DENIED')) {
+            break;
+          }
+        }
+      }
+      if (stream) break;
+    }
+
+    if (!stream) {
+      const errMsg = String(lastErr?.message || lastErr || 'Failed to stream content from verified models.');
+      const isQuota = errMsg.includes('429') || errMsg.includes('RESOURCE_EXHAUSTED') || errMsg.includes('quota');
+      res.status(isQuota ? 429 : 502).json({ error: errMsg });
+      return;
+    }
+
+    res.setHeader('Content-Type', 'text/event-stream; charset=utf-8');
+    res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+    res.setHeader('Connection', 'keep-alive');
+    res.setHeader('X-Accel-Buffering', 'no');
+    if (activeModelUsed) {
+      res.setHeader('X-Gemini-Model-Used', activeModelUsed);
+    }
+    res.flushHeaders?.();
+
+    for await (const chunk of stream) {
+      if (chunk?.text) {
+        res.write(`data: ${JSON.stringify({ text: chunk.text, modelUsed: activeModelUsed })}\n\n`);
+      }
+    }
+    res.write(`data: ${JSON.stringify({ done: true, modelUsed: activeModelUsed })}\n\n`);
+    res.write('data: [DONE]\n\n');
+    res.end();
+  } catch (err: any) {
+    console.error('Reader Stream Error:', err);
+    if (!res.headersSent) {
+      res.status(500).json({ error: err?.message || 'Reader streaming failed' });
+    } else {
+      res.write(`data: ${JSON.stringify({ error: err?.message || 'Stream interrupted' })}\n\n`);
+      res.end();
+    }
+  }
+});
+
+// Helper: Detect Cloudflare / anti-bot verification responses on server
+function isServerChallengePage(text: string): boolean {
+  if (!text) return true;
+  const sample = text.slice(0, 4000).toLowerCase();
+  const markers = [
+    'performing security verification',
+    'verifying you are human',
+    'just a moment...',
+    'checking your browser before accessing',
+    'attention required! | cloudflare',
+    'enable javascript and cookies to continue',
+    'cf-browser-verification',
+    'cloudflare ray id',
+    'ddos protection by cloudflare',
+    'verify you are human by completing the action',
+  ];
+  const matched = markers.some((m) => sample.includes(m));
+  return matched && (text.trim().length < 6000 || sample.includes('cloudflare') || sample.includes('performing security verification'));
+}
+
+function stripServerTrackingParams(rawUrl: string): string {
+  try {
+    const parsed = new URL(rawUrl.trim());
+    const toDelete: string[] = [];
+    parsed.searchParams.forEach((_v, k) => {
+      const lower = k.toLowerCase();
+      if (
+        lower.startsWith('utm_') ||
+        ['fbclid', 'gclid', 'dclid', 'mc_cid', 'mc_eid', '_ga', '_gl', 'ref', 'ref_src', 'via'].includes(lower)
+      ) {
+        toDelete.push(k);
+      }
+    });
+    toDelete.forEach((k) => parsed.searchParams.delete(k));
+    return parsed.toString();
+  } catch {
+    return rawUrl.trim();
+  }
+}
+
+function serverHtmlToCleanMarkdown(html: string, baseUrl: string): { title: string; content: string } {
+  const titleMatch = html.match(/<title[^>]*>([\s\S]*?)<\/title>/i);
+  const h1Match = html.match(/<h1[^>]*>([\s\S]*?)<\/h1>/i);
+  const decodeEntities = (s: string) =>
+    s
+      .replace(/&nbsp;/gi, ' ')
+      .replace(/&amp;/gi, '&')
+      .replace(/&lt;/gi, '<')
+      .replace(/&gt;/gi, '>')
+      .replace(/&quot;/gi, '"')
+      .replace(/&#39;/gi, "'");
+
+  const stripTags = (s: string) => decodeEntities(s.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim());
+
+  const title = stripTags(h1Match?.[1] || titleMatch?.[1] || '');
+
+  // Isolate <article> or <main> if present
+  let body = html;
+  const articleMatch = html.match(/<article[^>]*>([\s\S]*?)<\/article>/i);
+  const mainMatch = html.match(/<main[^>]*>([\s\S]*?)<\/main>/i);
+  if (articleMatch && articleMatch[1] && articleMatch[1].length > 500) {
+    body = articleMatch[1];
+  } else if (mainMatch && mainMatch[1] && mainMatch[1].length > 500) {
+    body = mainMatch[1];
+  }
+
+  // Remove script, style, nav, header, footer, aside, cookie/menu blocks
+  body = body
+    .replace(/<script\b[^<]*(?:(?!<\/script>)<[^<]*)*<\/script>/gi, ' ')
+    .replace(/<style\b[^<]*(?:(?!<\/style>)<[^<]*)*<\/style>/gi, ' ')
+    .replace(/<noscript\b[^<]*(?:(?!<\/noscript>)<[^<]*)*<\/noscript>/gi, ' ')
+    .replace(/<(nav|header|footer|aside)\b[^>]*>[\s\S]*?<\/\1>/gi, ' ');
+
+  // Convert HTML tables to Markdown pipe tables
+  body = body.replace(/<table[^>]*>([\s\S]*?)<\/table>/gi, (_m, tableInner) => {
+    const rows: string[][] = [];
+    const trRegex = /<tr[^>]*>([\s\S]*?)<\/tr>/gi;
+    let trMatch: RegExpExecArray | null;
+    while ((trMatch = trRegex.exec(tableInner)) !== null) {
+      const cells: string[] = [];
+      const cellRegex = /<(th|td)[^>]*>([\s\S]*?)<\/\1>/gi;
+      let cellMatch: RegExpExecArray | null;
+      while ((cellMatch = cellRegex.exec(trMatch[1])) !== null) {
+        cells.push(stripTags(cellMatch[2]).replace(/\|/g, '/'));
+      }
+      if (cells.length > 0 && cells.some(Boolean)) rows.push(cells);
+    }
+    if (rows.length === 0) return '\n';
+    const colCount = Math.max(...rows.map((r) => r.length));
+    const mdRows = rows.map((r) => {
+      const padded = [...r];
+      while (padded.length < colCount) padded.push('');
+      return `| ${padded.join(' | ')} |`;
+    });
+    const sep = `| ${Array(colCount).fill('---').join(' | ')} |`;
+    return `\n\n${mdRows[0]}\n${sep}\n${mdRows.slice(1).join('\n')}\n\n`;
+  });
+
+  // Convert educational <img> tags to Markdown images
+  body = body.replace(/<img\b([^>]*)>/gi, (_m, attrs) => {
+    const srcMatch = attrs.match(/(?:src|data-src)=["']([^"']+)["']/i);
+    const altMatch = attrs.match(/alt=["']([^"']*)["']/i);
+    if (!srcMatch?.[1]) return '';
+    let absSrc = srcMatch[1];
+    try {
+      absSrc = new URL(absSrc, baseUrl).toString();
+    } catch {}
+    const alt = decodeEntities(altMatch?.[1] || 'Academic Figure').trim();
+    if (/logo|icon|avatar|badge|spinner|pixel|1x1/i.test(absSrc) || /logo|icon/i.test(alt)) {
+      return '';
+    }
+    return `\n![${alt}](${stripServerTrackingParams(absSrc)})\n`;
+  });
+
+  // Convert headings & paragraphs
+  body = body
+    .replace(/<h1[^>]*>([\s\S]*?)<\/h1>/gi, (_m, t) => `\n# ${stripTags(t)}\n`)
+    .replace(/<h2[^>]*>([\s\S]*?)<\/h2>/gi, (_m, t) => `\n## ${stripTags(t)}\n`)
+    .replace(/<h3[^>]*>([\s\S]*?)<\/h3>/gi, (_m, t) => `\n### ${stripTags(t)}\n`)
+    .replace(/<h4[^>]*>([\s\S]*?)<\/h4>/gi, (_m, t) => `\n### ${stripTags(t)}\n`)
+    .replace(/<li[^>]*>([\s\S]*?)<\/li>/gi, (_m, t) => `\n- ${stripTags(t)}`)
+    .replace(/<(p|div|section|blockquote)[^>]*>/gi, '\n')
+    .replace(/<\/(p|div|section|blockquote)>/gi, '\n')
+    .replace(/<br\s*\/?>/gi, '\n');
+
+  const text = decodeEntities(body.replace(/<[^>]+>/g, ' '))
+    .replace(/[ \t]+\n/g, '\n')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
+
+  return { title, content: text };
+}
+
+async function handleReaderExtract(rawUrl: string, res: Response): Promise<void> {
+  const cleanUrl = stripServerTrackingParams(rawUrl);
+  if (!cleanUrl || !/^https?:\/\/.+/i.test(cleanUrl)) {
+    res.status(400).json({ error: 'Valid HTTP/HTTPS URL is required.' });
+    return;
+  }
+
+  // 1. Direct NCBI / PubMed Central BioC Open Access API Fast Path (Zero Anti-Bot Checks)
+  const pmcMatch = cleanUrl.match(/\/(?:pmc\/articles|articles)\/(PMC\d{4,12})/i);
+  if (pmcMatch && pmcMatch[1]) {
+    const pmcId = pmcMatch[1].toUpperCase();
+    try {
+      const biocCtrl = new AbortController();
+      const biocTimer = setTimeout(() => biocCtrl.abort(), 7000);
+      const biocRes = await fetch(
+        `https://www.ncbi.nlm.nih.gov/research/bionlp/RESTful/pmcoa.cgi/BioC_json/${encodeURIComponent(pmcId)}/unicode`,
+        { signal: biocCtrl.signal, headers: { Accept: 'application/json' } }
+      );
+      clearTimeout(biocTimer);
+      if (biocRes.ok) {
+        const data: any = await biocRes.json();
+        const docs = Array.isArray(data) ? data[0]?.documents : data?.documents;
+        const passages = Array.isArray(docs) ? docs[0]?.passages : null;
+        if (Array.isArray(passages) && passages.length > 0) {
+          let title = pmcId;
+          const blocks: string[] = [];
+          for (const p of passages) {
+            const pText = String(p?.text || '').trim();
+            if (!pText) continue;
+            const type = String(p?.infons?.type || '').toLowerCase();
+            if (type === 'front' || type === 'title') {
+              if (title === pmcId) title = pText;
+              blocks.push(`# ${pText}`);
+            } else if (type.startsWith('title')) {
+              blocks.push(`## ${pText}`);
+            } else if (type === 'table') {
+              blocks.push(pText);
+            } else {
+              blocks.push(pText);
+            }
+          }
+          const combined = blocks.join('\n\n');
+          if (combined.length > 600) {
+            res.json({
+              type: 'html',
+              title,
+              content: combined,
+              sourceUrl: cleanUrl,
+              extractor: 'ncbi_bioc',
+            });
+            return;
+          }
+        }
+      }
+    } catch {
+      // Fall through seamlessly to Jina Reader
+    }
+  }
+
+  // 2. Primary Automated Security-Check Bypass: Jina Reader API (encoded + browser challenge resolution)
+  const jinaAttempts = [
+    {
+      endpoint: `https://r.jina.ai/${encodeURIComponent(cleanUrl)}`,
+      headers: {
+        Accept: 'text/plain, text/markdown',
+        'X-No-Cache': 'true',
+        'X-With-Generated-Alt': 'true',
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36',
+      },
+      timeoutMs: 12000,
+    },
+    {
+      endpoint: `https://r.jina.ai/${cleanUrl}`,
+      headers: {
+        Accept: 'text/plain, text/markdown',
+        'X-No-Cache': 'true',
+        'X-Engine': 'browser',
+        'X-Wait-For-Selector': 'article, main, .article-body, #main-content',
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36',
+      },
+      timeoutMs: 16000,
+    },
+  ];
+
+  for (const attempt of jinaAttempts) {
+    try {
+      const ctrl = new AbortController();
+      const timer = setTimeout(() => ctrl.abort(), attempt.timeoutMs);
+      const jinaRes = await fetch(attempt.endpoint, {
+        method: 'GET',
+        headers: attempt.headers,
+        signal: ctrl.signal,
+      });
+      clearTimeout(timer);
+
+      if (jinaRes.ok) {
+        const text = await jinaRes.text();
+        if (text && text.trim().length > 250 && !isServerChallengePage(text)) {
+          const titleLine = text.match(/^Title:\s*(.+)$/im)?.[1]?.trim() || '';
+          res.json({
+            type: 'html',
+            title: titleLine || cleanUrl.split('/').pop() || 'Academic Article',
+            content: text,
+            sourceUrl: cleanUrl,
+            extractor: 'jina_reader',
+          });
+          return;
+        }
+      }
+    } catch {
+      // Try next extraction strategy
+    }
+  }
+
+  // 3. Readability-Style Direct Fetch with Realistic Browser Headers
+  try {
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), 12000);
+    const directRes = await fetch(cleanUrl, {
+      method: 'GET',
+      signal: ctrl.signal,
+      redirect: 'follow',
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36',
+        Accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,application/pdf,*/*;q=0.8',
+        'Accept-Language': 'en-US,en;q=0.9',
+        'Sec-Fetch-Dest': 'document',
+        'Sec-Fetch-Mode': 'navigate',
+        'Sec-Fetch-Site': 'none',
+        'Upgrade-Insecure-Requests': '1',
+      },
+    });
+    clearTimeout(timer);
+
+    const contentType = (directRes.headers.get('content-type') || '').toLowerCase();
+    if (directRes.ok && contentType.includes('application/pdf')) {
+      res.json({ type: 'pdf', sourceUrl: cleanUrl, title: cleanUrl.split('/').pop() || 'Textbook.pdf' });
+      return;
+    }
+
+    if (directRes.ok) {
+      const html = await directRes.text();
+      if (!isServerChallengePage(html)) {
+        const parsed = serverHtmlToCleanMarkdown(html, cleanUrl);
+        if (parsed.content && parsed.content.length > 250) {
+          res.json({
+            type: 'html',
+            title: parsed.title || 'Academic Article',
+            content: parsed.content,
+            sourceUrl: cleanUrl,
+            extractor: 'readability_direct',
+          });
+          return;
+        }
+      }
+    }
+  } catch {
+    // Fall through to error response
+  }
+
+  res.status(422).json({
+    error: 'The target academic host blocked automated access or returned an empty verification page.',
+  });
+}
+
+app.get('/api/reader/extract', async (req: Request, res: Response): Promise<void> => {
+  await handleReaderExtract(String(req.query.url || ''), res);
+});
+
+app.post('/api/reader/extract', async (req: Request, res: Response): Promise<void> => {
+  await handleReaderExtract(String(req.body?.url || req.query.url || ''), res);
+});
+
 const SERVER_APP_VERSION = 'v1.2.0';
 
 app.get('/api/version', (_req: Request, res: Response) => {

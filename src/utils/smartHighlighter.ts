@@ -59,19 +59,19 @@ export function getHighlightedHtml(text: string): string {
   // 1. Highlight Definitions (Yellow)
   processed = processed.replace(
     /\b([A-Z][a-zA-Z\s]{2,30})\s+(is|are|refers to|means|represents)\s+([^.,\n]+)/g,
-    '<mark class="hl-def bg-yellow-500/25 text-yellow-200 px-1 rounded border-b-2 border-yellow-500" title="Definition / Concept">$1 $2 $3</mark>'
+    '<mark class="hl-def bg-yellow-400/25 text-inherit px-1 rounded border-b-2 border-yellow-500" title="Definition / Concept">$1 $2 $3</mark>'
   );
 
   // 2. Highlight Core Principles (Blue)
   processed = processed.replace(
     /\b(crucial|fundamental|essential|primary objective|key principle|in contrast|notably)\b/gi,
-    '<mark class="hl-principle bg-blue-500/25 text-blue-200 px-1 rounded border-b-2 border-blue-500" title="Core Principle">$1</mark>'
+    '<mark class="hl-principle bg-blue-500/25 text-inherit px-1 rounded border-b-2 border-blue-500" title="Core Principle">$1</mark>'
   );
 
   // 3. Highlight Quantitative Data & Standards (Green)
   processed = processed.replace(
     /\b(\d+(\.\d+)?%|\$[0-9,]+(\.\d+)?|GAAP|FASB|SEC|IFRS)\b/g,
-    '<mark class="hl-data bg-emerald-500/25 text-emerald-200 px-1 rounded border-b-2 border-emerald-500 font-mono" title="Quantitative Data / Standard">$1</mark>'
+    '<mark class="hl-data bg-emerald-500/25 text-inherit px-1 rounded border-b-2 border-emerald-500 font-mono" title="Quantitative Data / Standard">$1</mark>'
   );
 
   return processed;

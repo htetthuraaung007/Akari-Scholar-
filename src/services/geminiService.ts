@@ -691,33 +691,40 @@ export function validateApiKey(apiKey?: string): string {
 }
 
 /**
- * Server-Side Key Validation Function (`validateGeminiApiKey`)
- * Validates the user's or server's Gemini API key via the `/api/academic/health` server endpoint.
+ * Lightweight Metadata Probe Key Validation (`validateGeminiApiKey`)
+ * Validates Gemini API key via ultra-lightweight models metadata endpoint probe with keep-alive and performance.now() latency measurement.
  */
 export async function validateGeminiApiKey(
   apiKey: string
 ): Promise<{ success: boolean; valid: boolean; message: string; latency?: number; httpStatus?: number }> {
   const trimmedKey = cleanGeminiKey((apiKey || '').trim());
-  const startTime = performance.now();
+  if (!trimmedKey) {
+    return {
+      success: false,
+      valid: false,
+      message: 'API Key is missing or empty',
+      latency: 0,
+      httpStatus: 400,
+    };
+  }
+
+  const start = performance.now();
 
   try {
-    const headers: Record<string, string> = {
-      'Content-Type': 'application/json',
-    };
-    if (trimmedKey) {
-      headers['x-gemini-key'] = trimmedKey;
-      headers['x-goog-api-key'] = trimmedKey;
-      headers['x-strict-key'] = '1';
-    }
-
-    const res = await fetch('/api/academic/health', {
-      method: 'GET',
-      headers,
-    });
-    const latency = Math.round(performance.now() - startTime);
+    const res = await fetch(
+      `https://generativelanguage.googleapis.com/v1beta/models?pageSize=1&key=${encodeURIComponent(trimmedKey)}`,
+      {
+        method: 'GET',
+        cache: 'no-store',
+        headers: {
+          'Connection': 'keep-alive',
+        },
+      }
+    );
+    const latency = Math.round(performance.now() - start);
     const data = await res.json().catch(() => null);
 
-    if (res.ok && data?.healthy) {
+    if (res.ok) {
       if (trimmedKey && typeof window !== 'undefined') {
         try {
           localStorage.setItem(`key_status_${trimmedKey.slice(-6)}`, 'active');
@@ -727,18 +734,21 @@ export async function validateGeminiApiKey(
       return {
         success: true,
         valid: true,
-        message: data.message || 'API Key verified and activated successfully!',
-        latency: data.latencyMs || latency,
+        message: 'API Key verified and activated successfully!',
+        latency,
         httpStatus: 200,
       };
     }
 
-    const status = res.status || (data?.status === 'quota_exceeded' ? 429 : 400);
+    const status = res.status || 400;
+    const errorMsg = data?.error?.message || '';
+    const isExhausted = status === 429 || errorMsg.toLowerCase().includes('quota') || errorMsg.includes('RESOURCE_EXHAUSTED');
+
     if (trimmedKey && typeof window !== 'undefined') {
       try {
         localStorage.setItem(
           `key_status_${trimmedKey.slice(-6)}`,
-          status === 429 ? 'exhausted' : 'invalid'
+          isExhausted ? 'exhausted' : 'invalid'
         );
       } catch {}
     }
@@ -747,21 +757,20 @@ export async function validateGeminiApiKey(
       success: false,
       valid: false,
       message:
-        data?.message ||
-        (status === 403
+        status === 403
           ? 'API Key forbidden or invalid location [403] - Check VPN'
-          : status === 429
+          : isExhausted
           ? 'Quota exceeded [429] - Rate limit hit'
-          : 'Invalid API Key format [400]'),
-      latency: data?.latencyMs || latency,
+          : errorMsg || 'Invalid API Key format [400]',
+      latency,
       httpStatus: status,
     };
   } catch {
-    const latency = Math.round(performance.now() - startTime);
+    const latency = Math.round(performance.now() - start);
     return {
       success: false,
       valid: false,
-      message: 'Network connection error - Ensure server is reachable',
+      message: 'Network connection error - Ensure internet or VPN is accessible',
       latency,
     };
   }

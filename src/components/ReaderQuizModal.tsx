@@ -1,28 +1,20 @@
-import React, { useState, useEffect } from 'react';
-import { useApp } from '../context/AppContext';
+import React, { useState, useEffect, useRef } from 'react';
+import { streamReaderQuiz, ReaderQuizQuestion } from '../services/readerAiService';
 import {
   Brain,
   CheckCircle,
   XCircle,
   RotateCcw,
-  BookOpen,
   ArrowRight,
   X,
   Sparkles,
   HelpCircle,
+  RefreshCw,
 } from 'lucide-react';
-
-interface QuizQuestion {
-  id: number;
-  question: string;
-  options: string[];
-  correctAnswerIndex: number;
-  explanation: string;
-}
 
 interface QuizData {
   quizTitle: string;
-  questions: QuizQuestion[];
+  questions: ReaderQuizQuestion[];
 }
 
 interface ReaderQuizModalProps {
@@ -38,37 +30,90 @@ export const ReaderQuizModal: React.FC<ReaderQuizModalProps> = ({
   chapterText,
   sectionTitle,
 }) => {
-  const { callAcademicApi } = useApp();
   const [loading, setLoading] = useState(false);
+  const [isStreamingMore, setIsStreamingMore] = useState(false);
   const [quizData, setQuizData] = useState<QuizData | null>(null);
   const [currentIndex, setCurrentIndex] = useState(0);
   const [selectedAnswers, setSelectedAnswers] = useState<Record<number, number>>({});
   const [showResult, setShowResult] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
+  const abortRef = useRef<AbortController | null>(null);
+  const lastContentSigRef = useRef<string>('');
+
+  const contentSig = `${sectionTitle}::${(chapterText || '').slice(0, 200)}::${(chapterText || '').length}`;
+
   useEffect(() => {
-    if (isOpen && !quizData && !loading) {
+    if (!isOpen) {
+      if (abortRef.current) {
+        abortRef.current.abort();
+        abortRef.current = null;
+      }
+      return;
+    }
+
+    const sourceChanged = lastContentSigRef.current !== contentSig;
+    if (sourceChanged) {
+      lastContentSigRef.current = contentSig;
+      setQuizData(null);
+      setSelectedAnswers({});
+      setCurrentIndex(0);
+      setShowResult(false);
+      generateQuiz();
+    } else if (!quizData && !loading) {
       generateQuiz();
     }
-  }, [isOpen]);
+
+    return () => {
+      if (abortRef.current) {
+        abortRef.current.abort();
+        abortRef.current = null;
+      }
+    };
+  }, [isOpen, contentSig]);
 
   const generateQuiz = async () => {
+    if (abortRef.current) {
+      abortRef.current.abort();
+    }
+    const controller = new AbortController();
+    abortRef.current = controller;
+
     setLoading(true);
+    setIsStreamingMore(true);
     setErrorMessage(null);
+    setQuizData(null);
+    setSelectedAnswers({});
+    setCurrentIndex(0);
+    setShowResult(false);
+
     try {
-      const res = await callAcademicApi('reader_quiz', {
+      const result = await streamReaderQuiz({
+        sectionTitle,
         content: chapterText || sectionTitle,
+        signal: controller.signal,
+        onProgress: (streamedQuestions) => {
+          if (streamedQuestions.length > 0) {
+            setQuizData({
+              quizTitle: `Self-Assessment: ${sectionTitle}`,
+              questions: streamedQuestions,
+            });
+            // Stop showing initial spinner as soon as Q1 is ready
+            setLoading(false);
+          }
+        },
       });
-      const parsed = typeof res === 'string' ? JSON.parse(res) : res;
-      if (parsed && parsed.questions && Array.isArray(parsed.questions)) {
-        setQuizData(parsed);
-      } else {
-        throw new Error('Invalid quiz structure received from AI.');
-      }
+
+      setQuizData({
+        quizTitle: result.quizTitle,
+        questions: result.questions,
+      });
     } catch (err: any) {
-      setErrorMessage(err.message || 'Failed to generate quiz. Please try again.');
+      if (err?.name === 'AbortError') return;
+      setErrorMessage(err?.message || 'Failed to generate quiz. Please try again.');
     } finally {
       setLoading(false);
+      setIsStreamingMore(false);
     }
   };
 
@@ -81,7 +126,7 @@ export const ReaderQuizModal: React.FC<ReaderQuizModalProps> = ({
     if (!quizData) return;
     if (currentIndex < quizData.questions.length - 1) {
       setCurrentIndex((prev) => prev + 1);
-    } else {
+    } else if (!isStreamingMore) {
       setShowResult(true);
     }
   };
@@ -113,37 +158,57 @@ export const ReaderQuizModal: React.FC<ReaderQuizModalProps> = ({
       <div className="bg-slate-900 border border-slate-800 rounded-3xl w-full max-w-2xl max-h-[90vh] flex flex-col shadow-2xl overflow-hidden animate-in zoom-in-95 duration-200">
         {/* Header */}
         <div className="px-6 py-4 border-b border-slate-800 flex items-center justify-between bg-slate-950/60">
-          <div className="flex items-center space-x-3">
-            <div className="w-10 h-10 rounded-2xl bg-emerald-500/10 text-emerald-400 flex items-center justify-center">
+          <div className="flex items-center space-x-3 min-w-0">
+            <div className="w-10 h-10 rounded-2xl bg-emerald-500/10 text-emerald-400 flex items-center justify-center shrink-0">
               <Brain className="w-5 h-5" />
             </div>
-            <div>
-              <h2 className="text-sm font-bold text-white uppercase tracking-wider">
-                {quizData?.quizTitle || 'Chapter Self-Assessment Quiz'}
-              </h2>
+            <div className="min-w-0">
+              <div className="flex items-center space-x-2">
+                <h2 className="text-sm font-bold text-white uppercase tracking-wider truncate">
+                  {quizData?.quizTitle || 'Chapter Self-Assessment Quiz'}
+                </h2>
+                {isStreamingMore && (
+                  <span className="text-[10px] font-semibold px-2 py-0.5 rounded-full bg-emerald-500/15 text-emerald-300 border border-emerald-500/30 shrink-0">
+                    Streaming...
+                  </span>
+                )}
+              </div>
               <p className="text-xs text-slate-400 truncate max-w-md">{sectionTitle}</p>
             </div>
           </div>
-          <button
-            type="button"
-            onClick={onClose}
-            className="p-2 rounded-xl text-slate-400 hover:text-white hover:bg-slate-800 cursor-pointer transition-colors"
-          >
-            <X className="w-5 h-5" />
-          </button>
+          <div className="flex items-center space-x-1.5 shrink-0">
+            {!loading && (
+              <button
+                type="button"
+                onClick={generateQuiz}
+                disabled={isStreamingMore}
+                className="p-2 rounded-xl text-slate-400 hover:text-emerald-300 hover:bg-slate-800 disabled:opacity-40 cursor-pointer transition-colors"
+                title="Generate New Questions"
+              >
+                <RefreshCw className={`w-4 h-4 ${isStreamingMore ? 'animate-spin' : ''}`} />
+              </button>
+            )}
+            <button
+              type="button"
+              onClick={onClose}
+              className="p-2 rounded-xl text-slate-400 hover:text-white hover:bg-slate-800 cursor-pointer transition-colors"
+            >
+              <X className="w-5 h-5" />
+            </button>
+          </div>
         </div>
 
         {/* Content Body */}
         <div className="p-6 overflow-y-auto flex-1 space-y-6">
-          {loading ? (
+          {loading && !quizData ? (
             <div className="py-16 flex flex-col items-center justify-center space-y-4 text-center">
               <div className="w-10 h-10 border-3 border-emerald-500 border-t-transparent rounded-full animate-spin" />
               <div className="space-y-1">
-                <p className="text-sm font-bold text-white">Generating Concept-Check Quiz...</p>
-                <p className="text-xs text-slate-400">Analyzing active section text with AI professorial rigor</p>
+                <p className="text-sm font-bold text-white">Streaming Concept-Check Quiz...</p>
+                <p className="text-xs text-slate-400">Questions appear instantaneously as the model streams</p>
               </div>
             </div>
-          ) : errorMessage ? (
+          ) : errorMessage && !quizData ? (
             <div className="p-4 rounded-2xl bg-rose-500/10 border border-rose-500/30 text-rose-300 text-xs text-center space-y-3">
               <p>{errorMessage}</p>
               <button
@@ -163,7 +228,7 @@ export const ReaderQuizModal: React.FC<ReaderQuizModalProps> = ({
                 <h3 className="text-xl font-extrabold text-white">Quiz Completed Successfully!</h3>
                 <div className="text-3xl font-black text-emerald-400">
                   Score: {correctCount} / {quizData.questions.length} (
-                  {Math.round((correctCount / quizData.questions.length) * 100)}%)
+                  {Math.round((correctCount / Math.max(1, quizData.questions.length)) * 100)}%)
                 </div>
                 <p className="text-xs text-slate-400 max-w-sm mx-auto">
                   {correctCount === quizData.questions.length
@@ -197,6 +262,7 @@ export const ReaderQuizModal: React.FC<ReaderQuizModalProps> = ({
               <div className="flex items-center justify-between text-xs">
                 <span className="font-bold uppercase tracking-wider text-emerald-400 bg-emerald-500/10 px-3 py-1 rounded-full border border-emerald-500/30">
                   Question {currentIndex + 1} of {quizData.questions.length}
+                  {isStreamingMore ? '+' : ''}
                 </span>
                 <span className="text-slate-400">
                   Answered: {answeredCount} / {quizData.questions.length}
@@ -266,18 +332,26 @@ export const ReaderQuizModal: React.FC<ReaderQuizModalProps> = ({
         </div>
 
         {/* Footer Next Button */}
-        {quizData && !showResult && !loading && !errorMessage && (
+        {quizData && !showResult && !errorMessage && (
           <div className="px-6 py-4 border-t border-slate-800 bg-slate-950/60 flex items-center justify-between">
             <span className="text-xs text-slate-500">
-              {isAnswered ? 'Review explanation & proceed' : 'Select an option to check answer'}
+              {isAnswered
+                ? isStreamingMore && currentIndex === quizData.questions.length - 1
+                  ? 'Streaming next question...'
+                  : 'Review explanation & proceed'
+                : 'Select an option to check answer'}
             </span>
             <button
               type="button"
-              disabled={!isAnswered}
+              disabled={!isAnswered || (isStreamingMore && currentIndex === quizData.questions.length - 1)}
               onClick={handleNext}
               className="flex items-center space-x-2 px-6 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 disabled:opacity-40 text-white text-xs font-bold transition-all shadow-md shadow-emerald-600/20 cursor-pointer"
             >
-              <span>{currentIndex === quizData.questions.length - 1 ? 'View Results' : 'Next Question'}</span>
+              <span>
+                {currentIndex === quizData.questions.length - 1 && !isStreamingMore
+                  ? 'View Results'
+                  : 'Next Question'}
+              </span>
               <ArrowRight className="w-4 h-4" />
             </button>
           </div>
