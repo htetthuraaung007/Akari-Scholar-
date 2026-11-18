@@ -1,4 +1,8 @@
 import React, { useState, useEffect, useRef } from 'react';
+import {
+  clearAllSyllabusFiles,
+  safeLocalStorageSetItem,
+} from '../utils/storageHelper';
 
 export const AKARI_EMERGENCY_WIPE_EVENT = 'akari_emergency_wipe';
 
@@ -24,7 +28,7 @@ export const AKARI_FEATURE_STORAGE_KEYS = {
 /**
  * Universal LocalStorage persistence hook that:
  * 1. Reads from window.localStorage on initial mount (with safe JSON parsing & optional legacy key fallback).
- * 2. Automatically writes back to window.localStorage on state change.
+ * 2. Automatically writes back to window.localStorage on state change (guarded against QuotaExceededError).
  * 3. Listens to window storage & custom Emergency Wipe events ('akari_emergency_wipe') to reset cleanly.
  */
 export function usePersistentState<T>(
@@ -67,12 +71,12 @@ export function usePersistentState<T>(
     }
     try {
       const serialized = JSON.stringify(state);
-      window.localStorage.setItem(key, serialized);
+      safeLocalStorageSetItem(key, serialized);
       if (legacyKey) {
-        window.localStorage.setItem(legacyKey, serialized);
+        safeLocalStorageSetItem(legacyKey, serialized);
       }
     } catch (error) {
-      console.warn(`Error writing localStorage key "${key}":`, error);
+      console.warn(`Error serializing state for localStorage key "${key}":`, error);
     }
   }, [key, legacyKey, state]);
 
@@ -112,10 +116,12 @@ export function usePersistentState<T>(
 /**
  * Master Emergency Wipe helper:
  * Clears all akari_* and uopeople_* keys (plus legacy feature keys) from localStorage and sessionStorage,
+ * purges all syllabus files from IndexedDB (`AkariScholarStorageDB`),
  * and dispatches 'akari_emergency_wipe' so all mounted components immediately reset to initial defaults.
  */
 export function executeEmergencyWipeAllStorage(): void {
   if (typeof window === 'undefined') return;
+  void clearAllSyllabusFiles();
   try {
     const keysToRemove: string[] = [];
     for (let i = 0; i < window.localStorage.length; i++) {
@@ -139,3 +145,4 @@ export function executeEmergencyWipeAllStorage(): void {
   }
   window.dispatchEvent(new CustomEvent(AKARI_EMERGENCY_WIPE_EVENT));
 }
+

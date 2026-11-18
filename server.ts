@@ -320,10 +320,15 @@ app.get('/api/academic/models', async (req: Request, res: Response): Promise<voi
   });
 });
 
-// Server-Sent Events (SSE) Streaming endpoint for Gemini Content Generation
+// Server-Sent Events (SSE) Streaming endpoint for Gemini Content Generation (Low-Latency TTFT)
 app.post('/api/academic/stream', async (req: Request, res: Response): Promise<void> => {
   try {
-    const { prompt, payload } = req.body;
+    const {
+      prompt: rawPrompt,
+      payload = {},
+      model: requestedModelRaw,
+      strictModel = false,
+    } = req.body || {};
     const candidateKeys = getCandidateServerKeys(req);
 
     if (candidateKeys.length === 0) {
@@ -331,36 +336,141 @@ app.post('/api/academic/stream', async (req: Request, res: Response): Promise<vo
       return;
     }
 
-    const contents = prompt || payload?.content || payload?.text || 'Hello';
-    let stream: any = null;
-    let lastErr: any = null;
+    const strictKeyHeader = req.headers['x-strict-key'] === '1';
+    const rawHeaderKey = (
+      (req.headers['x-gemini-key'] as string | undefined) ||
+      (req.headers['x-goog-api-key'] as string | undefined) ||
+      ''
+    )
+      .replace(/["'\s]/g, '')
+      .trim();
 
-    const catalog = await discoverActiveServerModels(candidateKeys);
-    const streamModels = [...catalog.standard, ...catalog.lightweight];
+    const effectiveKeys =
+      strictKeyHeader && rawHeaderKey.length >= 10 ? [rawHeaderKey] : candidateKeys;
+
+    const textPrompt = String(rawPrompt || payload?.prompt || payload?.content || payload?.text || 'Hello').trim();
+    let contentsPayload: any = textPrompt;
+
+    if (payload?.contents) {
+      contentsPayload = payload.contents;
+    } else if (Array.isArray(payload?.images) && payload.images.length > 0) {
+      const parts: any[] = [];
+      payload.images.forEach((img: any) => {
+        const rawUrl = String(img.base64 || img.dataUrl || img.data || '');
+        const mimeType =
+          img.mimeType ||
+          (rawUrl.startsWith('data:') ? rawUrl.split(';')[0].replace('data:', '') : 'image/jpeg');
+        const cleanBase64 = rawUrl.replace(/^data:[^;]+;base64,/, '');
+        if (cleanBase64) {
+          parts.push({
+            inlineData: {
+              mimeType,
+              data: cleanBase64,
+            },
+          });
+        }
+      });
+      parts.push({ text: textPrompt });
+      contentsPayload = parts;
+    } else if (payload?.imageBase64) {
+      const mimeType = payload.imageMimeType || 'image/jpeg';
+      const cleanBase64 = String(payload.imageBase64).replace(/^data:[^;]+;base64,/, '');
+      contentsPayload = [
+        { text: textPrompt },
+        {
+          inlineData: {
+            mimeType,
+            data: cleanBase64,
+          },
+        },
+      ];
+    }
+
+    const catalog = await discoverActiveServerModels(effectiveKeys);
+    const defaultStreamModels = [...catalog.lightweight, ...catalog.standard];
+    const cleanRequested = typeof requestedModelRaw === 'string' ? requestedModelRaw.replace(/^models\//, '').trim() : '';
+    const hasSpecificModel =
+      Boolean(cleanRequested) &&
+      cleanRequested !== 'auto' &&
+      cleanRequested !== 'auto-cascade' &&
+      (defaultStreamModels.length === 0 || defaultStreamModels.includes(cleanRequested));
+
+    const streamModels =
+      strictModel && hasSpecificModel
+        ? [cleanRequested]
+        : hasSpecificModel
+        ? [cleanRequested, ...defaultStreamModels.filter((m) => m !== cleanRequested)]
+        : defaultStreamModels;
 
     if (streamModels.length === 0) {
       res.status(400).json({ error: 'No verified generateContent Gemini models are currently available for your API key.' });
       return;
     }
 
-    for (const apiKey of candidateKeys) {
+    let stream: any = null;
+    let activeModelUsed = '';
+    let lastErr: any = null;
+
+    for (const apiKey of effectiveKeys) {
       const ai = new GoogleGenAI({
         apiKey,
         httpOptions: {
           headers: { 'User-Agent': 'aistudio-build' },
+          timeout: 45000,
         },
       });
 
       for (const model of streamModels) {
         try {
-          stream = await ai.models.generateContentStream({
-            model,
-            contents,
-            config: {
-              systemInstruction: ACADEMIC_SYSTEM_PROMPT,
-            },
-          });
-          if (stream) break;
+          const lowerModel = model.toLowerCase();
+          const isLiteModel = lowerModel.includes('lite') || lowerModel.includes('8b');
+          const omitsSamplingParams =
+            lowerModel.includes('hydrogen') ||
+            lowerModel.includes('argon') ||
+            lowerModel.includes('carbon') ||
+            lowerModel.includes('3.8-flash');
+
+          const requestConfig: Record<string, any> = {
+            systemInstruction: payload?.systemInstruction || ACADEMIC_SYSTEM_PROMPT,
+            thinkingConfig: { thinkingLevel: isLiteModel ? ThinkingLevel.MINIMAL : ThinkingLevel.LOW },
+            ...(omitsSamplingParams
+              ? {}
+              : payload?.temperature !== undefined
+              ? { temperature: payload.temperature }
+              : {}),
+          };
+
+          if (payload?.maxOutputTokens) {
+            requestConfig.maxOutputTokens = payload.maxOutputTokens;
+          }
+          if (payload?.responseMimeType) {
+            requestConfig.responseMimeType = payload.responseMimeType;
+          }
+
+          try {
+            stream = await ai.models.generateContentStream({
+              model,
+              contents: contentsPayload,
+              config: requestConfig,
+            });
+          } catch (innerErr: any) {
+            const innerMsg = String(innerErr?.message || innerErr || '');
+            if (innerMsg.toLowerCase().includes('thinking')) {
+              delete requestConfig.thinkingConfig;
+              stream = await ai.models.generateContentStream({
+                model,
+                contents: contentsPayload,
+                config: requestConfig,
+              });
+            } else {
+              throw innerErr;
+            }
+          }
+
+          if (stream) {
+            activeModelUsed = model;
+            break;
+          }
         } catch (err: any) {
           lastErr = err;
           const errMsg = String(err?.message || err);
@@ -373,24 +483,40 @@ app.post('/api/academic/stream', async (req: Request, res: Response): Promise<vo
     }
 
     if (!stream) {
-      throw lastErr || new Error('Streaming failed');
+      const errMsg = String(lastErr?.message || lastErr || 'Streaming failed');
+      const isRateLimit = errMsg.includes('429') || errMsg.includes('RESOURCE_EXHAUSTED') || errMsg.includes('quota');
+      const isInvalidKey = errMsg.includes('API key not valid') || errMsg.includes('API_KEY_INVALID') || errMsg.includes('PERMISSION_DENIED');
+      const isNotFound = errMsg.includes('404') || errMsg.includes('NOT_FOUND');
+      res.status(isInvalidKey ? 400 : isRateLimit ? 429 : isNotFound ? 404 : 502).json({
+        error: errMsg,
+        status: isInvalidKey ? 'api_key_invalid' : isRateLimit ? 'quota_exhausted' : isNotFound ? 'model_unavailable' : 'upstream_error',
+      });
+      return;
     }
 
-    res.setHeader('Content-Type', 'text/event-stream');
-    res.setHeader('Cache-Control', 'no-cache');
+    res.setHeader('Content-Type', 'text/event-stream; charset=utf-8');
+    res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
     res.setHeader('Connection', 'keep-alive');
+    res.setHeader('X-Accel-Buffering', 'no');
+    if (activeModelUsed) {
+      res.setHeader('X-Gemini-Model-Used', activeModelUsed);
+    }
+    res.flushHeaders?.();
 
     for await (const chunk of stream) {
       if (chunk.text) {
-        res.write(`data: ${JSON.stringify({ text: chunk.text })}\n\n`);
+        res.write(`data: ${JSON.stringify({ text: chunk.text, modelUsed: activeModelUsed })}\n\n`);
       }
     }
+    res.write(`data: ${JSON.stringify({ done: true, modelUsed: activeModelUsed })}\n\n`);
     res.write('data: [DONE]\n\n');
     res.end();
   } catch (err: any) {
     console.error('Gemini Stream Error:', err);
     if (!res.headersSent) {
-      res.status(500).json({ error: err.message || 'Streaming failed' });
+      const errMsg = String(err?.message || 'Streaming failed');
+      const isRateLimit = errMsg.includes('429') || errMsg.includes('RESOURCE_EXHAUSTED');
+      res.status(isRateLimit ? 429 : 500).json({ error: errMsg });
     } else {
       res.write(`data: ${JSON.stringify({ error: err.message })}\n\n`);
       res.end();

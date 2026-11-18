@@ -395,18 +395,41 @@ export async function resolveDynamicModelCatalog(
       const usedKeyFingerprint = expectedFingerprint;
       const activeKey = candidateKeys[0] || '';
 
-      const headers: Record<string, string> = { 'Content-Type': 'application/json' };
-      if (activeKey) {
-        headers['x-gemini-key'] = activeKey;
-        headers['x-goog-api-key'] = activeKey;
+      // 1. One-Time Live Model Fetch (Direct v1beta/models when key is present, or server proxy)
+      if (activeKey && isValidGeminiKeyFormat(activeKey)) {
+        try {
+          const directCtrl = new AbortController();
+          const directTimer = setTimeout(() => directCtrl.abort(), 4500);
+          const directRes = await fetch(
+            `https://generativelanguage.googleapis.com/v1beta/models?key=${encodeURIComponent(activeKey)}`,
+            { method: 'GET', signal: directCtrl.signal }
+          );
+          clearTimeout(directTimer);
+          if (directRes.ok) {
+            const directData = await directRes.json();
+            if (Array.isArray(directData?.models) && directData.models.length > 0) {
+              rawList = directData.models;
+            }
+          }
+        } catch {
+          // Fall back silently to server model discovery endpoint
+        }
       }
-      const res = await fetch('/api/academic/models', {
-        method: 'GET',
-        headers,
-      });
-      if (res.ok) {
-        const data = await res.json();
-        rawList = Array.isArray(data?.models) ? data.models : [];
+
+      if (rawList.length === 0) {
+        const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+        if (activeKey) {
+          headers['x-gemini-key'] = activeKey;
+          headers['x-goog-api-key'] = activeKey;
+        }
+        const res = await fetch('/api/academic/models', {
+          method: 'GET',
+          headers,
+        });
+        if (res.ok) {
+          const data = await res.json();
+          rawList = Array.isArray(data?.models) ? data.models : [];
+        }
       }
 
       if (rawList.length > 0) {
@@ -438,9 +461,9 @@ export async function resolveDynamicModelCatalog(
 
     const fallbackCatalog: DynamicModelCatalog = {
       lightweight: TIER_LIGHTWEIGHT.length > 0 ? [...TIER_LIGHTWEIGHT] : ['gemini-2.5-flash-lite'],
-      standard: TIER_STANDARD.length > 0 ? [...TIER_STANDARD] : ['gemini-2.5-flash', 'gemini-1.5-flash'],
+      standard: TIER_STANDARD.length > 0 ? [...TIER_STANDARD] : ['gemini-2.5-flash'],
       heavy: TIER_HEAVY.length > 0 ? [...TIER_HEAVY] : ['gemini-2.5-pro'],
-      all: ['gemini-2.5-flash', 'gemini-2.5-flash-lite', 'gemini-1.5-flash'],
+      all: ['gemini-2.5-flash-lite', 'gemini-2.5-flash'],
       timestamp: Date.now(),
     };
     return inMemoryModelCatalog || fallbackCatalog;
@@ -562,11 +585,11 @@ export function getModelCascade(complexity: TaskComplexity = 'standard'): string
     complexity === 'light'
       ? [...lightTier, ...standardTier, ...heavyTier]
       : complexity === 'standard'
-      ? [...standardTier, ...lightTier, ...heavyTier]
+      ? [...lightTier, ...standardTier, ...heavyTier]
       : [...standardTier, ...heavyTier, ...lightTier];
 
   const unique = Array.from(new Set(ordered)).filter((m) => m && m !== 'auto');
-  return unique.length > 0 ? unique : ['gemini-2.5-flash', 'gemini-2.5-flash-lite', 'gemini-1.5-flash'];
+  return unique.length > 0 ? unique : ['gemini-2.5-flash-lite', 'gemini-2.5-flash'];
 }
 
 /**
@@ -746,7 +769,7 @@ export async function validateGeminiApiKey(
 
 /**
  * Server-Side Gemini Dispatcher (`generateGeminiResponse`)
- * Routes all generation requests through the server-side `/api/academic/assist` endpoint.
+ * Routes generation requests through the low-latency streaming & 4000ms soft-fallback cascade.
  */
 export async function generateGeminiResponse(
   prompt: string,
@@ -757,6 +780,8 @@ export async function generateGeminiResponse(
     responseMimeType?: string;
     images?: { name?: string; base64: string; mimeType?: string }[];
     apiKey?: string;
+    onStreamChunk?: (chunkText: string, accumulatedText: string) => void;
+    softTimeoutMs?: number;
   }
 ): Promise<string> {
   const activeKey = cleanGeminiKey(
@@ -765,31 +790,21 @@ export async function generateGeminiResponse(
       getActiveApiKey()
   );
 
-  const headers: Record<string, string> = { 'Content-Type': 'application/json' };
-  if (activeKey) {
-    headers['x-gemini-key'] = activeKey;
-    headers['x-goog-api-key'] = activeKey;
-  }
-  const res = await fetch('/api/academic/assist', {
-    method: 'POST',
-    headers,
-    body: JSON.stringify({
-      action: 'direct_assist',
-      payload: {
-        prompt,
-        systemInstruction: options?.systemInstruction,
-        temperature: options?.temperature,
-        maxOutputTokens: options?.maxOutputTokens,
-        responseMimeType: options?.responseMimeType,
-        images: options?.images,
-      },
-    }),
+  const res = await executeAcademicActionWithCascade({
+    action: 'direct_assist',
+    primaryKey: activeKey,
+    onStreamChunk: options?.onStreamChunk,
+    softTimeoutMs: options?.softTimeoutMs,
+    payload: {
+      prompt,
+      systemInstruction: options?.systemInstruction,
+      temperature: options?.temperature,
+      maxOutputTokens: options?.maxOutputTokens,
+      responseMimeType: options?.responseMimeType,
+      images: options?.images,
+    },
   });
-  const data = await res.json().catch(() => null);
-  if (!res.ok || !data) {
-    throw new Error(data?.error || data?.message || `HTTP ${res.status}`);
-  }
-  return typeof data.result === 'string' ? data.result : JSON.stringify(data.result);
+  return typeof res === 'string' ? res : res?.result || res?.text || JSON.stringify(res);
 }
 
 /**
@@ -847,6 +862,7 @@ export async function directGoogleGenerateContent(options: {
   systemInstruction?: string;
   temperature?: number;
   maxOutputTokens?: number;
+  onStreamChunk?: (chunkText: string, accumulatedText: string) => void;
 }): Promise<string> {
   const res = await executeAcademicActionWithCascade({
     action: 'direct_assist',
@@ -859,6 +875,7 @@ export async function directGoogleGenerateContent(options: {
     },
     primaryKey: options.apiKey,
     preferredModel: options.model,
+    onStreamChunk: options.onStreamChunk,
   });
   return typeof res === 'string' ? res : res?.result || res?.text || JSON.stringify(res);
 }
@@ -873,7 +890,8 @@ export const fetchAvailableGeminiFlashModels = async (apiKey?: string): Promise<
 export const callGeminiDynamic = async (
   prompt: string,
   maxTokens: number = 800,
-  imagePayload?: { name: string; dataUrl: string }[]
+  imagePayload?: { name: string; dataUrl: string }[],
+  onStreamChunk?: (chunkText: string, accumulatedText: string) => void
 ): Promise<{ text: string; modelUsed: string } | null> => {
   const images = (imagePayload || []).map((img) => ({
     name: img.name,
@@ -889,6 +907,7 @@ export const callGeminiDynamic = async (
     const result = await executeAcademicActionWithCascade({
       action: 'direct_assist',
       complexity,
+      onStreamChunk,
       payload: {
         prompt,
         maxOutputTokens: maxTokens,
@@ -1541,8 +1560,12 @@ export async function batchIngestSources(
 }
 
 // =========================================================================
-// PART 1 & 2: TOKEN-OPTIMIZED DYNAMIC ROUTING & 2-LAYER AUTO-CASCADE
+// PART 1 & 2: LOW-LATENCY STREAMING, PAYLOAD COMPRESSION & 2-LAYER CASCADE
 // =========================================================================
+
+export const DEFAULT_SOFT_TTFT_TIMEOUT_MS = 4000;
+export const MAX_API_IMAGE_DIMENSION = 1568;
+export const DEFAULT_IMAGE_COMPRESSION_QUALITY = 0.82;
 
 export interface DispatchOptions {
   action: string;
@@ -1553,8 +1576,144 @@ export interface DispatchOptions {
   backupKey?: string;
   preferredModel?: string;
   signal?: AbortSignal;
+  softTimeoutMs?: number;
+  preferStreaming?: boolean;
+  onStreamChunk?: (chunkText: string, accumulatedText: string) => void;
   onCascadeToast?: (message: string, model: string) => void;
   onQuotaExhausted?: (retryFn: () => Promise<void>) => void;
+}
+
+/**
+ * Strips redundant whitespace, collapses excessive blank lines, and removes repetitive padding
+ * to minimize input token serialization and network payload size across mobile and desktop.
+ */
+export function compactPromptWhitespace(raw?: string): string {
+  if (!raw || typeof raw !== 'string') return '';
+  return raw
+    .replace(/\r\n/g, '\n')
+    .replace(/[ \t]+$/gm, '')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
+}
+
+/**
+ * Cross-Platform Image Payload Compressor (Max 1568px, WebP/JPEG @ 0.82 quality):
+ * Scales down high-resolution screenshots/photos before transmission to drastically cut
+ * cellular mobile and Wi-Fi upload latency while preserving full OCR/vision fidelity.
+ * Non-image payloads (e.g., `application/pdf`) are passed through untouched.
+ */
+export async function compressImagePayload(
+  dataUrlOrBase64: string,
+  explicitMimeType?: string,
+  maxDimension: number = MAX_API_IMAGE_DIMENSION,
+  quality: number = DEFAULT_IMAGE_COMPRESSION_QUALITY
+): Promise<{ base64: string; dataUrl: string; mimeType: string }> {
+  const raw = String(dataUrlOrBase64 || '').trim();
+  const detectedMime =
+    explicitMimeType ||
+    (raw.startsWith('data:') ? raw.split(';')[0].replace('data:', '') : 'image/jpeg');
+  const cleanBase64 = raw.replace(/^data:[^;]+;base64,/, '');
+  const fullDataUrl = raw.startsWith('data:') ? raw : `data:${detectedMime};base64,${cleanBase64}`;
+
+  if (
+    typeof window === 'undefined' ||
+    typeof document === 'undefined' ||
+    !detectedMime.startsWith('image/') ||
+    detectedMime === 'image/svg+xml' ||
+    detectedMime === 'image/gif' ||
+    cleanBase64.length < 90_000
+  ) {
+    return { base64: cleanBase64, dataUrl: fullDataUrl, mimeType: detectedMime };
+  }
+
+  return new Promise((resolve) => {
+    const img = new Image();
+    const safetyTimer = setTimeout(() => {
+      resolve({ base64: cleanBase64, dataUrl: fullDataUrl, mimeType: detectedMime });
+    }, 2500);
+
+    img.onload = () => {
+      clearTimeout(safetyTimer);
+      try {
+        let width = img.naturalWidth || img.width;
+        let height = img.naturalHeight || img.height;
+        if (!width || !height) {
+          resolve({ base64: cleanBase64, dataUrl: fullDataUrl, mimeType: detectedMime });
+          return;
+        }
+
+        const longestEdge = Math.max(width, height);
+        if (longestEdge > maxDimension) {
+          const scale = maxDimension / longestEdge;
+          width = Math.max(1, Math.round(width * scale));
+          height = Math.max(1, Math.round(height * scale));
+        }
+
+        const canvas = document.createElement('canvas');
+        canvas.width = width;
+        canvas.height = height;
+        const ctx = canvas.getContext('2d');
+        if (!ctx) {
+          resolve({ base64: cleanBase64, dataUrl: fullDataUrl, mimeType: detectedMime });
+          return;
+        }
+
+        ctx.fillStyle = '#FFFFFF';
+        ctx.fillRect(0, 0, width, height);
+        ctx.drawImage(img, 0, 0, width, height);
+
+        let targetMime = 'image/webp';
+        let compressedDataUrl = canvas.toDataURL(targetMime, quality);
+        if (!compressedDataUrl.startsWith('data:image/webp')) {
+          targetMime = 'image/jpeg';
+          compressedDataUrl = canvas.toDataURL(targetMime, quality);
+        }
+
+        const compressedBase64 = compressedDataUrl.replace(/^data:[^;]+;base64,/, '');
+        if (compressedBase64 && compressedBase64.length < cleanBase64.length) {
+          resolve({
+            base64: compressedBase64,
+            dataUrl: compressedDataUrl,
+            mimeType: targetMime,
+          });
+        } else {
+          resolve({ base64: cleanBase64, dataUrl: fullDataUrl, mimeType: detectedMime });
+        }
+      } catch {
+        resolve({ base64: cleanBase64, dataUrl: fullDataUrl, mimeType: detectedMime });
+      }
+    };
+
+    img.onerror = () => {
+      clearTimeout(safetyTimer);
+      resolve({ base64: cleanBase64, dataUrl: fullDataUrl, mimeType: detectedMime });
+    };
+
+    img.src = fullDataUrl;
+  });
+}
+
+/**
+ * Compresses an array of image payloads in parallel before API transmission.
+ */
+export async function compressImagePayloads(
+  images?: { name?: string; base64?: string; dataUrl?: string; mimeType?: string }[]
+): Promise<{ name?: string; base64: string; mimeType: string }[] | undefined> {
+  if (!Array.isArray(images) || images.length === 0) return undefined;
+  const valid = images.filter((img) => Boolean(img?.base64 || img?.dataUrl));
+  if (valid.length === 0) return undefined;
+
+  return Promise.all(
+    valid.map(async (img) => {
+      const raw = String(img.base64 || img.dataUrl || '');
+      const compressed = await compressImagePayload(raw, img.mimeType);
+      return {
+        name: img.name,
+        base64: compressed.base64,
+        mimeType: compressed.mimeType,
+      };
+    })
+  );
 }
 
 const PROMPT_CACHE_STORAGE_KEY = 'akari_gemini_prompt_cache_v2';
@@ -1616,7 +1775,8 @@ function setCachedPromptResponse(sig: string, responseText: string): void {
 }
 
 /**
- * Direct Prompt Convenience Wrapper with Verified Model Resolution, Instant Cache & AbortSignal
+ * Direct Prompt Convenience Wrapper with Verified Model Resolution, Payload Compression,
+ * Streaming TTFT Race, Instant Cache & AbortSignal
  */
 export async function executeGeminiRequest(
   prompt: string,
@@ -1626,9 +1786,13 @@ export async function executeGeminiRequest(
   maxTokens?: number,
   signal?: AbortSignal,
   bypassCache: boolean = false,
-  responseMimeType?: string
+  responseMimeType?: string,
+  onStreamChunk?: (chunkText: string, accumulatedText: string) => void
 ): Promise<string> {
-  const images = (imagePayload || [])
+  const compactPrompt = compactPromptWhitespace(prompt);
+  const compactSystem = compactPromptWhitespace(systemInstruction);
+
+  const rawImages = (imagePayload || [])
     .filter((img) => Boolean(img?.dataUrl))
     .map((img) => ({
       name: img.name,
@@ -1636,32 +1800,36 @@ export async function executeGeminiRequest(
       mimeType: img.dataUrl.split(';')[0]?.split(':')[1] || 'image/jpeg',
     }));
 
-  const cacheSig = computePromptSignature(prompt, complexity, systemInstruction, images.length);
+  const cacheSig = computePromptSignature(compactPrompt, complexity, compactSystem, rawImages.length);
   if (!bypassCache) {
     const cached = getCachedPromptResponse(cacheSig);
     if (cached) {
+      onStreamChunk?.(cached, cached);
       return cached;
     }
   }
 
+  const compressedImages = await compressImagePayloads(rawImages);
+
   const expectsJson =
     responseMimeType === 'application/json' ||
     (!responseMimeType &&
-      typeof systemInstruction === 'string' &&
-      /return only a valid json object/i.test(systemInstruction));
+      typeof compactSystem === 'string' &&
+      /return only a valid json object|output only a raw, valid json/i.test(compactSystem));
 
   const res = await executeAcademicActionWithCascade({
     action: 'direct_assist',
     complexity,
     signal,
+    onStreamChunk,
     payload: {
-      prompt,
-      systemInstruction,
+      prompt: compactPrompt,
+      systemInstruction: compactSystem || undefined,
       temperature: complexity === 'light' ? 0.2 : 0.45,
       responseMimeType: expectsJson ? 'application/json' : responseMimeType,
       maxOutputTokens:
         maxTokens || (complexity === 'light' ? 1400 : complexity === 'heavy' ? 4096 : 3200),
-      images: images.length > 0 ? images : undefined,
+      images: compressedImages,
     },
   });
   const finalOutput =
@@ -1673,7 +1841,183 @@ export async function executeGeminiRequest(
 }
 
 /**
- * Core Resilient 2-Layer Auto-Cascade Dispatcher (Key Cascade + Verified Model Cascade)
+ * Executes a single model attempt via `generateContentStream` SSE (`/api/academic/stream`)
+ * with a Soft First-Token Latency Race (`softTimeoutMs`, default 4000ms).
+ * - If the model fails to emit its first token within `softTimeoutMs`, aborts immediately via `AbortController`
+ *   so the caller can switch to the next cached model on the SAME API key without waiting.
+ * - Once the first token arrives, clears the soft timer and streams the full output to completion.
+ */
+async function attemptModelStreamWithSoftRace(params: {
+  model: string;
+  cleanKey: string;
+  prompt: string;
+  systemInstruction?: string;
+  temperature?: number;
+  maxOutputTokens?: number;
+  responseMimeType?: string;
+  images?: { name?: string; base64: string; mimeType?: string }[];
+  externalSignal?: AbortSignal;
+  softTimeoutMs: number;
+  onStreamChunk?: (chunkText: string, accumulatedText: string) => void;
+}): Promise<{ text: string; modelUsed: string }> {
+  const {
+    model,
+    cleanKey,
+    prompt,
+    systemInstruction,
+    temperature,
+    maxOutputTokens,
+    responseMimeType,
+    images,
+    externalSignal,
+    softTimeoutMs,
+    onStreamChunk,
+  } = params;
+
+  const attemptController = new AbortController();
+  let softTimedOut = false;
+  let firstTokenReceived = false;
+
+  const onExternalAbort = () => {
+    attemptController.abort();
+  };
+  if (externalSignal) {
+    if (externalSignal.aborted) {
+      throw new DOMException('Request aborted', 'AbortError');
+    }
+    externalSignal.addEventListener('abort', onExternalAbort, { once: true });
+  }
+
+  const ttftTimer = setTimeout(() => {
+    if (!firstTokenReceived) {
+      softTimedOut = true;
+      attemptController.abort();
+    }
+  }, softTimeoutMs);
+
+  try {
+    const headers: Record<string, string> = {
+      'Content-Type': 'application/json',
+    };
+    if (cleanKey) {
+      headers['x-gemini-key'] = cleanKey;
+      headers['x-goog-api-key'] = cleanKey;
+      headers['x-strict-key'] = '1';
+    }
+
+    const res = await fetch('/api/academic/stream', {
+      method: 'POST',
+      headers,
+      signal: attemptController.signal,
+      body: JSON.stringify({
+        model,
+        strictModel: model !== 'auto',
+        prompt,
+        payload: {
+          prompt,
+          systemInstruction,
+          temperature,
+          maxOutputTokens,
+          responseMimeType,
+          images,
+        },
+      }),
+    });
+
+    if (!res.ok || !res.body) {
+      clearTimeout(ttftTimer);
+      const errData = await res.json().catch(() => null);
+      const errMsg = String(errData?.error || errData?.message || `HTTP ${res.status}`);
+      const errorObj: any = new Error(errMsg);
+      errorObj.httpStatus = res.status;
+      errorObj.status = errData?.status;
+      throw errorObj;
+    }
+
+    const reader = res.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = '';
+    let accumulatedText = '';
+    let resolvedModelUsed = res.headers.get('X-Gemini-Model-Used') || model;
+
+    while (true) {
+      const { value, done } = await reader.read();
+      if (done) break;
+
+      buffer += decoder.decode(value, { stream: true });
+      const lines = buffer.split('\n');
+      buffer = lines.pop() || '';
+
+      for (const line of lines) {
+        const trimmed = line.trim();
+        if (!trimmed || !trimmed.startsWith('data:')) continue;
+        const dataStr = trimmed.replace(/^data:\s*/, '');
+        if (dataStr === '[DONE]') {
+          clearTimeout(ttftTimer);
+          return { text: accumulatedText, modelUsed: resolvedModelUsed };
+        }
+
+        let parsed: any = null;
+        try {
+          parsed = JSON.parse(dataStr);
+        } catch {
+          continue;
+        }
+
+        if (parsed?.error) {
+          clearTimeout(ttftTimer);
+          throw new Error(String(parsed.error));
+        }
+
+        if (parsed?.modelUsed) {
+          resolvedModelUsed = parsed.modelUsed;
+        }
+
+        const chunkText =
+          parsed?.text ??
+          parsed?.candidates?.[0]?.content?.parts?.map((p: any) => p?.text || '').join('') ??
+          '';
+
+        if (chunkText) {
+          if (!firstTokenReceived) {
+            firstTokenReceived = true;
+            clearTimeout(ttftTimer);
+          }
+          accumulatedText += chunkText;
+          onStreamChunk?.(chunkText, accumulatedText);
+        }
+      }
+    }
+
+    clearTimeout(ttftTimer);
+    if (!accumulatedText.trim()) {
+      throw new Error('Empty stream response from model');
+    }
+    return { text: accumulatedText, modelUsed: resolvedModelUsed };
+  } catch (err: any) {
+    clearTimeout(ttftTimer);
+    if (softTimedOut && !externalSignal?.aborted) {
+      const timeoutErr: any = new Error(`SOFT_TTFT_TIMEOUT: Model ${model} exceeded ${softTimeoutMs}ms TTFT threshold`);
+      timeoutErr.isSoftTimeout = true;
+      throw timeoutErr;
+    }
+    throw err;
+  } finally {
+    clearTimeout(ttftTimer);
+    if (externalSignal) {
+      externalSignal.removeEventListener('abort', onExternalAbort);
+    }
+  }
+}
+
+/**
+ * Core Resilient 2-Layer Auto-Cascade Dispatcher:
+ * - Layer 1 (Fast First-Token Model Race on SAME API Key):
+ *   Streams via `generateContentStream` and races each model in the sorted in-memory catalog against
+ *   a 4000ms TTFT soft threshold. If congested or rate-limited (429), immediately aborts and switches
+ *   to the next candidate model in memory using the SAME API key.
+ * - Layer 2 (Vault Key Failover ONLY on 429 / Invalid Key after cycling models):
+ *   Rotates to secondary keys in the Vault only when all candidate models on the active key are exhausted.
  */
 export async function executeAcademicActionWithCascade(options: DispatchOptions): Promise<any> {
   const {
@@ -1685,6 +2029,9 @@ export async function executeAcademicActionWithCascade(options: DispatchOptions)
     backupKey,
     preferredModel,
     signal,
+    softTimeoutMs,
+    preferStreaming = true,
+    onStreamChunk,
     onCascadeToast,
     onQuotaExhausted,
   } = options;
@@ -1716,7 +2063,7 @@ export async function executeAcademicActionWithCascade(options: DispatchOptions)
   // Always allow fallback to server environment key so the app works for everyone who opens it
   keyOrder.push({ key: '', label: 'Server Environment Key' });
 
-  // Resolve verified generateContent models once from memory cache / server API
+  // Resolve verified generateContent models once from memory cache / live v1beta/models
   await resolveDynamicModelCatalog(keyOrder[0]?.key || '');
 
   const resolvedComplexity = explicitComplexity || inferTaskComplexity(action, payload);
@@ -1740,6 +2087,16 @@ export async function executeAcademicActionWithCascade(options: DispatchOptions)
   };
 
   const resolvedReq = resolveAcademicActionRequest(action, enrichedPayload, targetLanguage || 'both');
+  const compactPrompt = compactPromptWhitespace(resolvedReq.prompt);
+  const compactSystem = compactPromptWhitespace(resolvedReq.systemInstruction);
+  const compressedImages = await compressImagePayloads(resolvedReq.images);
+
+  // Give multimodal image/PDF payloads a slightly higher soft TTFT budget (5500ms) while keeping text at 4000ms
+  const effectiveSoftTimeoutMs =
+    softTimeoutMs ??
+    (compressedImages && compressedImages.length > 0
+      ? Math.max(DEFAULT_SOFT_TTFT_TIMEOUT_MS, 5500)
+      : DEFAULT_SOFT_TTFT_TIMEOUT_MS);
 
   const generationConfig: Record<string, any> = {
     temperature: resolvedReq.temperature ?? (resolvedComplexity === 'light' ? 0.2 : 0.45),
@@ -1749,11 +2106,18 @@ export async function executeAcademicActionWithCascade(options: DispatchOptions)
     generationConfig.responseMimeType = resolvedReq.responseMimeType;
   }
 
+  const hasSearchSources =
+    action === 'generate_study_cards' &&
+    Array.isArray(payload?.sources) &&
+    payload.sources.some((s: string) => typeof s === 'string' && s.trim().length > 0);
+
+  const canUseStream = preferStreaming && !hasSearchSources;
+
   let finalError: any = null;
   let authErrorCycleCount = 0;
   const sessionDeadModels = new Set<string>();
 
-  // LAYER 2 (KEY CASCADE): Iterate sequentially across Primary -> Backup -> Multi-Account Pool -> Server Key
+  // LAYER 2 (KEY CASCADE): Keep active key untouched; only rotate keys if ALL models in chain fail with 429/auth
   for (let keyIdx = 0; keyIdx < keyOrder.length; keyIdx++) {
     if (signal?.aborted) {
       throw new DOMException('Request aborted', 'AbortError');
@@ -1772,7 +2136,7 @@ export async function executeAcademicActionWithCascade(options: DispatchOptions)
     }
 
     if (keyIdx > 0 && cleanKey) {
-      await new Promise((r) => setTimeout(r, 300));
+      await new Promise((r) => setTimeout(r, 200));
       if (modelChain.filter((m) => !sessionDeadModels.has(m)).length === 0) {
         const refreshed = await resolveDynamicModelCatalog(cleanKey, true);
         if (refreshed.all.length > 0) {
@@ -1784,16 +2148,47 @@ export async function executeAcademicActionWithCascade(options: DispatchOptions)
     const activeChain = modelChain.filter((m) => !sessionDeadModels.has(m));
     const effectiveChain = activeChain.length > 0 ? activeChain : ['auto'];
 
-    // LAYER 1 (MODEL CASCADE)
+    // LAYER 1 (FAST FIRST-TOKEN RACE & SOFT MODEL FALLBACK ON SAME API KEY)
     for (let modelIdx = 0; modelIdx < effectiveChain.length; modelIdx++) {
       if (signal?.aborted) {
         throw new DOMException('Request aborted', 'AbortError');
       }
 
       const rawModel = effectiveChain[modelIdx];
-      const currentModel = rawModel === 'auto' ? 'gemini-2.5-flash' : rawModel.replace(/^models\//, '');
+      const currentModel = rawModel === 'auto' ? 'gemini-2.5-flash-lite' : rawModel.replace(/^models\//, '');
 
       try {
+        if (canUseStream) {
+          const streamed = await attemptModelStreamWithSoftRace({
+            model: rawModel,
+            cleanKey,
+            prompt: compactPrompt,
+            systemInstruction: compactSystem || undefined,
+            temperature: generationConfig.temperature,
+            maxOutputTokens: generationConfig.maxOutputTokens,
+            responseMimeType: resolvedReq.responseMimeType,
+            images: compressedImages,
+            externalSignal: signal,
+            softTimeoutMs: effectiveSoftTimeoutMs,
+            onStreamChunk,
+          });
+
+          if (cleanKey && typeof window !== 'undefined') {
+            try {
+              localStorage.setItem(`key_status_${cleanKey.slice(-6)}`, 'active');
+            } catch {}
+          }
+          incrementDailyUsage(1200);
+          if (streamed.modelUsed || modelIdx > 0 || keyIdx > 0) {
+            onCascadeToast?.(
+              '⚡ Completed via Low-Latency Stream Cascade',
+              streamed.modelUsed || currentModel
+            );
+          }
+          return streamed.text;
+        }
+
+        // Non-streaming fallback path (e.g., search-grounded study cards) with AbortController timeout
         const headers: Record<string, string> = {
           'Content-Type': 'application/json',
         };
@@ -1809,12 +2204,12 @@ export async function executeAcademicActionWithCascade(options: DispatchOptions)
           body: JSON.stringify({
             action: 'direct_assist',
             payload: {
-              prompt: resolvedReq.prompt,
-              systemInstruction: resolvedReq.systemInstruction,
+              prompt: compactPrompt,
+              systemInstruction: compactSystem || undefined,
               temperature: generationConfig.temperature,
               maxOutputTokens: generationConfig.maxOutputTokens,
               responseMimeType: resolvedReq.responseMimeType,
-              images: resolvedReq.images,
+              images: compressedImages,
             },
             targetLanguage,
             model: rawModel,
@@ -1840,40 +2235,62 @@ export async function executeAcademicActionWithCascade(options: DispatchOptions)
         }
 
         const serverErrMsg = String(serverData?.error || serverData?.message || `HTTP ${serverRes.status}`);
-        if (serverRes.status === 404 || serverData?.status === 'model_unavailable') {
+        const httpErr: any = new Error(serverErrMsg);
+        httpErr.httpStatus = serverRes.status;
+        httpErr.status = serverData?.status;
+        throw httpErr;
+      } catch (err: any) {
+        if (signal?.aborted || (err?.name === 'AbortError' && !err?.isSoftTimeout)) {
+          throw err;
+        }
+
+        finalError = err;
+        const msg = String(err?.message || err);
+        const httpStatus = err?.httpStatus;
+
+        // 1. Soft TTFT Timeout (4000ms exceeded): Instantly switch to next model on SAME API key (0ms delay)
+        if (err?.isSoftTimeout || msg.includes('SOFT_TTFT_TIMEOUT')) {
+          if (modelIdx < effectiveChain.length - 1) {
+            continue;
+          }
+        }
+
+        // 2. Model 404 / Unavailable: Mark dead in memory and immediately try next model on SAME API key
+        if (httpStatus === 404 || err?.status === 'model_unavailable' || msg.includes('404') || msg.includes('NOT_FOUND')) {
           sessionDeadModels.add(rawModel);
           markModelUnavailable(rawModel);
+          if (modelIdx < effectiveChain.length - 1) {
+            continue;
+          }
         }
-        if (serverRes.status === 400 || serverRes.status === 401 || serverRes.status === 403) {
+
+        // 3. Invalid API Key (400/401/403): Break model loop and try backup/server key if available
+        if (
+          httpStatus === 400 ||
+          httpStatus === 401 ||
+          httpStatus === 403 ||
+          msg.includes('API_KEY_INVALID') ||
+          msg.includes('API key not valid') ||
+          msg.includes('PERMISSION_DENIED')
+        ) {
           authErrorCycleCount++;
           if (cleanKey && typeof window !== 'undefined') {
             try {
               localStorage.setItem(`key_status_${cleanKey.slice(-6)}`, 'invalid');
             } catch {}
           }
-          finalError = new Error(serverErrMsg);
           if (keyIdx < keyOrder.length - 1) {
             break;
           }
           throw finalError;
         }
 
-        finalError = new Error(serverErrMsg);
-        if (modelIdx < effectiveChain.length - 1) {
-          await new Promise((r) => setTimeout(r, 300));
-          continue;
-        }
-        if (keyIdx < keyOrder.length - 1) {
-          break;
-        }
-        throw finalError;
-      } catch (err: any) {
-        if (signal?.aborted || err?.name === 'AbortError') {
-          throw err;
-        }
-        finalError = err;
-        const msg = String(err?.message || err);
+        // 4. Rate Limit (429) or Server Congestion (503/504): Cycle through remaining models on SAME API key first!
         const isRetryable =
+          httpStatus === 429 ||
+          httpStatus === 503 ||
+          httpStatus === 504 ||
+          err?.isSoftTimeout ||
           msg.includes('429') ||
           msg.includes('503') ||
           msg.includes('504') ||
@@ -1882,13 +2299,18 @@ export async function executeAcademicActionWithCascade(options: DispatchOptions)
           msg.toLowerCase().includes('timed out') ||
           msg.includes('RESOURCE_EXHAUSTED') ||
           msg.includes('overloaded') ||
+          msg.includes('Empty stream') ||
           msg.includes('Failed to fetch') ||
           msg.includes('NetworkError');
 
-        if (isRetryable && modelIdx < effectiveChain.length - 1) {
-          await new Promise((r) => setTimeout(r, 300));
+        if (modelIdx < effectiveChain.length - 1) {
+          // Minimal 120ms backoff on 429; 0ms on soft timeout
+          if (!err?.isSoftTimeout) {
+            await new Promise((r) => setTimeout(r, 120));
+          }
           continue;
         } else if (keyIdx < keyOrder.length - 1) {
+          // All models on current key exhausted (429) -> rotate to secondary Vault key if configured
           break;
         } else if (!isRetryable) {
           throw err;
@@ -1972,7 +2394,7 @@ export async function executeWithKeyFailover<T>(
  */
 export function sanitizePayloadText(rawText: string, maxChars = 20000): string {
   if (!rawText) return '';
-  return rawText.slice(0, maxChars);
+  return compactPromptWhitespace(rawText).slice(0, maxChars);
 }
 
 export interface ThematicPillar {
@@ -2119,13 +2541,20 @@ ${sanitizedText || 'See attached academic slide/image.'}
 }
 
 /**
- * Environment-Adaptive SSE Streaming Helper
+ * Environment-Adaptive SSE Streaming Helper with 4000ms Soft Model Fallback Race
+ * Preserves active API key while racing candidate models for sub-second TTFT.
  */
 export async function streamAcademicContent(
   prompt: string,
   onChunk: (text: string) => void,
   onDone?: () => void,
-  apiKey?: string
+  apiKey?: string,
+  options?: {
+    systemInstruction?: string;
+    images?: { name?: string; base64?: string; dataUrl?: string; mimeType?: string }[];
+    softTimeoutMs?: number;
+    signal?: AbortSignal;
+  }
 ): Promise<void> {
   const cleanKey = cleanGeminiKey(
     apiKey ||
@@ -2133,59 +2562,23 @@ export async function streamAcademicContent(
       getActiveApiKey()
   );
 
-  const headers: Record<string, string> = {
-    'Content-Type': 'application/json',
-  };
-  if (cleanKey) {
-    headers['x-gemini-key'] = cleanKey;
-    headers['x-goog-api-key'] = cleanKey;
-  }
-  const response = await fetch('/api/academic/stream', {
-    method: 'POST',
-    headers,
-    body: JSON.stringify({ prompt }),
+  await executeAcademicActionWithCascade({
+    action: 'direct_assist',
+    primaryKey: cleanKey,
+    signal: options?.signal,
+    softTimeoutMs: options?.softTimeoutMs ?? DEFAULT_SOFT_TTFT_TIMEOUT_MS,
+    preferStreaming: true,
+    onStreamChunk: (chunkDelta) => {
+      if (chunkDelta) {
+        onChunk(chunkDelta);
+      }
+    },
+    payload: {
+      prompt: compactPromptWhitespace(prompt),
+      systemInstruction: options?.systemInstruction,
+      images: options?.images,
+    },
   });
-
-  if (!response.ok || !response.body) {
-    const errText = await response.text();
-    throw new Error(errText || `Streaming failed HTTP ${response.status}`);
-  }
-
-  const reader = response.body.getReader();
-  const decoder = new TextDecoder();
-  let buffer = '';
-
-  while (true) {
-    const { value, done } = await reader.read();
-    if (done) break;
-
-    buffer += decoder.decode(value, { stream: true });
-    const lines = buffer.split('\n');
-    buffer = lines.pop() || '';
-
-    for (const line of lines) {
-      const trimmed = line.trim();
-      if (!trimmed || !trimmed.startsWith('data:')) continue;
-      const dataStr = trimmed.replace(/^data:\s*/, '');
-      if (dataStr === '[DONE]') {
-        if (onDone) onDone();
-        return;
-      }
-      try {
-        const parsed = JSON.parse(dataStr);
-        const chunkText = parsed?.candidates?.[0]?.content?.parts
-          ?.map((p: any) => p?.text || '')
-          .join('');
-        if (chunkText) {
-          onChunk(chunkText);
-        } else if (parsed.text) {
-          onChunk(parsed.text);
-        }
-      } catch {
-        // Ignore partial JSON frames
-      }
-    }
-  }
 
   if (onDone) onDone();
 }

@@ -3,6 +3,7 @@ import { useApp } from '../context/AppContext';
 import {
   getUoPeopleTimeStatus,
   confirmDeadlineSubmission,
+  UOPEOPLE_SUBMISSION_UPDATED_EVENT,
   UoPeopleTimeStatus,
 } from '../utils/uopeopleTime';
 import { resolveLiveAcademicContext } from '../utils/uopeopleCalendar';
@@ -10,7 +11,6 @@ import {
   AlertTriangle,
   Clock,
   CheckCircle2,
-  Calendar,
   Flame,
   Globe,
   HelpCircle,
@@ -19,21 +19,27 @@ import {
 
 export const DeadlineNotificationBanner: React.FC = () => {
   const { language } = useApp();
-  const [timeStatus, setTimeStatus] = useState<UoPeopleTimeStatus & { isTermBreak: boolean }>(getUoPeopleTimeStatus());
+  const [timeStatus, setTimeStatus] = useState<UoPeopleTimeStatus & { isTermBreak: boolean }>(
+    getUoPeopleTimeStatus()
+  );
   const [showConfirmModal, setShowConfirmModal] = useState(false);
 
-  // Pure automated context calculation based on system/calendar dates
   const context = useMemo(() => resolveLiveAcademicContext(), []);
 
-  // Update live clock and deadline check every 15 seconds
   useEffect(() => {
-    const interval = setInterval(() => {
+    const refreshStatus = () => {
       setTimeStatus(getUoPeopleTimeStatus());
-    }, 15000);
-    return () => clearInterval(interval);
+    };
+    const interval = setInterval(refreshStatus, 15000);
+    window.addEventListener(UOPEOPLE_SUBMISSION_UPDATED_EVENT, refreshStatus);
+    window.addEventListener('storage', refreshStatus);
+    return () => {
+      clearInterval(interval);
+      window.removeEventListener(UOPEOPLE_SUBMISSION_UPDATED_EVENT, refreshStatus);
+      window.removeEventListener('storage', refreshStatus);
+    };
   }, []);
 
-  // If currently an active term according to calendar resolver, display deadline notifications
   if (!context.isTermBreak) {
     const activeAlert = timeStatus.activeDeadlineAlert;
     if (!activeAlert) return null;
@@ -45,8 +51,9 @@ export const DeadlineNotificationBanner: React.FC = () => {
     };
 
     const handleFinalConfirm = () => {
-      confirmDeadlineSubmission(activeAlert.deadlineKey);
+      confirmDeadlineSubmission(activeAlert.deadlineKey, activeAlert.weekNumber);
       setShowConfirmModal(false);
+      setTimeStatus(getUoPeopleTimeStatus());
     };
 
     return (
@@ -74,27 +81,42 @@ export const DeadlineNotificationBanner: React.FC = () => {
               <div>
                 <div className="flex items-center space-x-2">
                   <span className="text-xs font-bold uppercase tracking-wider px-2 py-0.5 rounded-full bg-slate-950/80 border border-slate-700 text-slate-200">
-                    {isUrgent ? (language === 'my' ? '⚠️ ၁၂ နာရီအလို အရေးပေါ်' : '⚠️ Under 12 Hours') : (language === 'my' ? '📅 ၁ ရက်အလို သတိပေးချက်' : '📅 24-Hour Notice')}
+                    {isUrgent
+                      ? language === 'my'
+                        ? '🚨 ၁၂ နာရီအလို အရေးပေါ်'
+                        : '🚨 Under 12 Hours'
+                      : language === 'my'
+                      ? '📢 ၂၄ နာရီအလို သတိပေးချက်'
+                      : '📢 24-Hour Notice'}
                   </span>
                   <span className="text-xs font-mono font-bold text-amber-300">
-                    {activeAlert.remainingHours}h {activeAlert.remainingMins}m {language === 'my' ? 'ကျန်ရှိ' : 'remaining'}
+                    {activeAlert.remainingHours}h {activeAlert.remainingMins}m{' '}
+                    {language === 'my' ? 'ကျန်ရှိ' : 'remaining'}
                   </span>
                 </div>
 
                 <h4 className="text-sm font-bold text-white mt-1">
-                  {language === 'my'
-                    ? `${activeAlert.type === 'discussion' ? 'Discussion Assignment' : 'Assignment Activity'} တင်ရန် Deadline နီးကပ်နေပါပြီ`
-                    : `Upcoming ${activeAlert.title}`}
+                  {activeAlert.alertBannerText}
                 </h4>
 
                 <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-slate-300 mt-1">
                   <span className="flex items-center space-x-1">
                     <Globe className="w-3.5 h-3.5 text-indigo-400" />
-                    <span>UoPeople Time: <strong className="text-white">{activeAlert.uopDeadlineStr}</strong></span>
+                    <span>
+                      UoPeople Time:{' '}
+                      <strong className="text-white">
+                        11:25 PM UoPeople Time (GMT-5)
+                      </strong>
+                    </span>
                   </span>
                   <span className="flex items-center space-x-1">
                     <Clock className="w-3.5 h-3.5 text-emerald-400" />
-                    <span>{language === 'my' ? 'ဖုန်းဒေသစံတော်ချိန်:' : 'Local Time:'} <strong className="text-emerald-300">{activeAlert.localDeadlineStr}</strong></span>
+                    <span>
+                      {language === 'my' ? 'ဖုန်းဒေသစံတော်ချိန်:' : 'Local Time:'}{' '}
+                      <strong className="text-emerald-300">
+                        {activeAlert.localDeadlineStr}
+                      </strong>
+                    </span>
                   </span>
                 </div>
               </div>
@@ -108,7 +130,7 @@ export const DeadlineNotificationBanner: React.FC = () => {
                 className="flex items-center space-x-1.5 px-4 py-2 rounded-xl text-xs font-bold bg-emerald-600 hover:bg-emerald-500 text-white shadow-lg shadow-emerald-600/30 transition-all hover:scale-[1.02] cursor-pointer"
               >
                 <CheckCircle2 className="w-4 h-4" />
-                <span>{language === 'my' ? 'တင်ပြီးပါပြီ (Mark as Submitted)' : 'Mark as Submitted'}</span>
+                <span>တင်ပြီးပါပြီ (Mark as Submitted)</span>
               </button>
             </div>
           </div>
@@ -123,21 +145,21 @@ export const DeadlineNotificationBanner: React.FC = () => {
               </div>
 
               <h3 className="text-base sm:text-lg font-bold text-white mb-2">
-                {language === 'my' ? 'သေချာတင်ပြီးခဲ့သလား?' : 'Confirm Moodle Submission'}
+                သေချာပါသလား? တင်ပြီးကြောင်း အတည်ပြုပါသလား။
               </h3>
 
               <p className="text-xs sm:text-sm text-slate-300 mb-4 leading-relaxed">
                 {language === 'my'
-                  ? `University of the People Moodle Portal တွင် သင်၏ ${activeAlert.type === 'discussion' ? 'Discussion Assignment' : 'Assignment Activity'} ကို အမှန်တကယ် တင်သွင်းပြီးစီးခဲ့ပြီလား သေချာစစ်ဆေး အတည်ပြုပေးပါ။`
-                  : `Please confirm that you have successfully submitted your ${activeAlert.type === 'discussion' ? 'Discussion Post' : 'Written Assignment Activity'} into the UoPeople Moodle portal.`}
+                  ? `University of the People Moodle Portal တွင် သင်၏ Week ${activeAlert.weekNumber} Assignment Activity ကို အမှန်တကယ် တင်သွင်းပြီးစီးခဲ့ပြီလား သေချာစစ်ဆေး အတည်ပြုပေးပါ။`
+                  : `Please confirm that you have successfully submitted your Week ${activeAlert.weekNumber} Assignment Activity into the UoPeople Moodle portal.`}
               </p>
 
               <div className="p-3 rounded-xl bg-slate-950 border border-slate-800 text-xs text-amber-300 mb-6 flex items-start space-x-2">
                 <HelpCircle className="w-4 h-4 text-amber-400 shrink-0 mt-0.5" />
                 <span>
                   {language === 'my'
-                    ? 'အတည်ပြုပြီးပါက ဤအပတ်အတွက် သတိပေးချက် notification ထပ်မံပေါ်လာမည် မဟုတ်တော့ပါ။'
-                    : 'Once confirmed, this deadline reminder notification will not appear again for this week.'}
+                    ? 'အတည်ပြုပြီးပါက ဤအပတ်အတွက် ၂၄ နာရီ နှင့် ၁၂ နာရီ သတိပေးချက် notification များ ထပ်မံပေါ်လာမည် မဟုတ်တော့ပါ။'
+                    : 'Once confirmed, all remaining 24h and 12h deadline notifications will be permanently suppressed for this week.'}
                 </span>
               </div>
 
@@ -145,14 +167,14 @@ export const DeadlineNotificationBanner: React.FC = () => {
                 <button
                   type="button"
                   onClick={() => setShowConfirmModal(false)}
-                  className="px-4 py-2 rounded-xl text-xs sm:text-sm font-semibold bg-slate-800 text-slate-300 hover:bg-slate-700 transition-colors"
+                  className="px-4 py-2 rounded-xl text-xs sm:text-sm font-semibold bg-slate-800 text-slate-300 hover:bg-slate-700 transition-colors cursor-pointer"
                 >
                   {language === 'my' ? 'မတင်ရသေးပါ (Cancel)' : 'Not Yet'}
                 </button>
                 <button
                   type="button"
                   onClick={handleFinalConfirm}
-                  className="px-4 py-2 rounded-xl text-xs sm:text-sm font-bold bg-emerald-600 text-white hover:bg-emerald-500 shadow-lg shadow-emerald-600/30 flex items-center space-x-1.5 transition-all"
+                  className="px-4 py-2 rounded-xl text-xs sm:text-sm font-bold bg-emerald-600 text-white hover:bg-emerald-500 shadow-lg shadow-emerald-600/30 flex items-center space-x-1.5 transition-all cursor-pointer"
                 >
                   <CheckCircle2 className="w-4 h-4" />
                   <span>{language === 'my' ? 'ဟုတ်ကဲ့၊ သေချာတင်ပြီးပါပြီ' : 'Yes, Confirmed'}</span>

@@ -127,7 +127,7 @@ const UoPeopleTimeBadge: React.FC = () => {
                   {language === 'my' ? 'Discussion Assignment Deadline' : 'Discussion Forum Deadline'}
                 </div>
                 <div className="text-[10px] text-slate-400">
-                  {language === 'my' ? 'အပတ်စဉ် တနင်္ဂနွေနေ့ ည ၁၁:၅၉ (UoPeople Time)' : 'Every Sunday 11:59 PM (GMT-5)'}
+                  {language === 'my' ? 'အပတ်စဉ် တနင်္ဂနွေနေ့ ည ၁၁:၂၅ (11:25 PM UoPeople Time / GMT-5)' : 'Every Sunday 11:25 PM UoPeople Time (GMT-5)'}
                 </div>
               </div>
               <div className="text-right font-mono">
@@ -146,7 +146,7 @@ const UoPeopleTimeBadge: React.FC = () => {
                   {language === 'my' ? 'Assignment Activity Deadline' : 'Assignment Activity Deadline'}
                 </div>
                 <div className="text-[10px] text-slate-400">
-                  {language === 'my' ? 'အပတ်စဉ် ဗုဒ္ဓဟူးနေ့ ည ၁၁:၅၉ (UoPeople Time)' : 'Every Wednesday 11:59 PM (GMT-5)'}
+                  {language === 'my' ? 'အပတ်စဉ် ဗုဒ္ဓဟူးနေ့ ည ၁၁:၂၅ (11:25 PM UoPeople Time / GMT-5)' : 'Every Wednesday 11:25 PM UoPeople Time (GMT-5)'}
                 </div>
               </div>
               <div className="text-right font-mono">

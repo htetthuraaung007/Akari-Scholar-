@@ -11,6 +11,16 @@ import {
   X,
 } from 'lucide-react';
 import { resolveLiveAcademicContext } from '../utils/uopeopleCalendar';
+import {
+  clearAllSyllabusFiles,
+  compressSyllabusAsset,
+   CompressedSyllabusAsset,
+  deleteSyllabusFile,
+  formatByteSizeLabel,
+  getSyllabusFile,
+  safeLocalStorageSetItem,
+  saveSyllabusFile,
+} from '../utils/storageHelper';
 
 export interface SyllabusWeights {
   discussion: number;
@@ -42,7 +52,13 @@ interface SyllabusFileMeta {
 
 interface CourseSlotState {
   slotId: number;
+  courseId?: number;
   defaultLabel: string;
+  courseName?: string;
+  isParsed?: boolean;
+  weights?: SyllabusWeights | null;
+  weeklyScores?: GradesByWeek;
+  fileName?: string;
   extractedSyllabus: ExtractedSyllabusState | null;
   currentWeek: number;
   gradesByWeek: GradesByWeek;
@@ -145,33 +161,41 @@ function sanitizeCourseSlot(raw: unknown, slotId: number): CourseSlotState {
   const obj = raw as Record<string, unknown>;
 
   let extractedSyllabus: ExtractedSyllabusState | null = null;
-  if (obj.extractedSyllabus && typeof obj.extractedSyllabus === 'object') {
-    const ext = obj.extractedSyllabus as Record<string, unknown>;
-    const rawWeights =
-      ext.weights && typeof ext.weights === 'object'
-        ? (ext.weights as Record<string, unknown>)
-        : null;
+  const extSource =
+    obj.extractedSyllabus && typeof obj.extractedSyllabus === 'object'
+      ? (obj.extractedSyllabus as Record<string, unknown>)
+      : null;
 
-    if (rawWeights) {
-      const discussion = Number(rawWeights.discussion) || 0;
-      const assignmentActivity = Number(rawWeights.assignmentActivity) || 0;
-      const quizzes = Number(rawWeights.quizzes) || 0;
-      const finalExam = Number(rawWeights.finalExam) || 0;
-      if (discussion + assignmentActivity + quizzes + finalExam > 0) {
-        extractedSyllabus = {
-          courseName:
-            typeof ext.courseName === 'string' && ext.courseName.trim()
-              ? ext.courseName.trim()
-              : `Course ${slotId}`,
-          weights: {
-            discussion,
-            assignmentActivity,
-            quizzes,
-            finalExam,
-          },
-          modelUsed: typeof ext.modelUsed === 'string' ? ext.modelUsed : 'cached',
-        };
-      }
+  const rawWeights =
+    extSource?.weights && typeof extSource.weights === 'object'
+      ? (extSource.weights as Record<string, unknown>)
+      : obj.weights && typeof obj.weights === 'object'
+      ? (obj.weights as Record<string, unknown>)
+      : null;
+
+  if (rawWeights && obj.isParsed !== false) {
+    const discussion = Number(rawWeights.discussion) || 0;
+    const assignmentActivity = Number(rawWeights.assignmentActivity) || 0;
+    const quizzes = Number(rawWeights.quizzes) || 0;
+    const finalExam = Number(rawWeights.finalExam) || 0;
+    if (discussion + assignmentActivity + quizzes + finalExam > 0) {
+      const resolvedCourseName =
+        typeof extSource?.courseName === 'string' && extSource.courseName.trim()
+          ? extSource.courseName.trim()
+          : typeof obj.courseName === 'string' && obj.courseName.trim()
+          ? obj.courseName.trim()
+          : `Course ${slotId}`;
+      extractedSyllabus = {
+        courseName: resolvedCourseName,
+        weights: {
+          discussion,
+          assignmentActivity,
+          quizzes,
+          finalExam,
+        },
+        modelUsed:
+          typeof extSource?.modelUsed === 'string' ? extSource.modelUsed : 'cached',
+      };
     }
   }
 
@@ -189,14 +213,29 @@ function sanitizeCourseSlot(raw: unknown, slotId: number): CourseSlotState {
         sizeLabel: typeof meta.sizeLabel === 'string' ? meta.sizeLabel : '',
       };
     }
+  } else if (typeof obj.fileName === 'string' && obj.fileName.trim()) {
+    const lowerFile = obj.fileName.toLowerCase();
+    syllabusFileMeta = {
+      name: obj.fileName.trim(),
+      type: lowerFile.endsWith('.pdf') ? 'application/pdf' : 'image/webp',
+      sizeLabel: '',
+    };
   }
+
+  const resolvedGrades = sanitizeGradesByWeek(obj.gradesByWeek ?? obj.weeklyScores);
 
   return {
     slotId,
+    courseId: slotId,
     defaultLabel: `Course ${slotId}`,
+    courseName: extractedSyllabus?.courseName ?? '',
+    isParsed: Boolean(extractedSyllabus),
+    weights: extractedSyllabus?.weights ?? null,
+    weeklyScores: resolvedGrades,
+    fileName: syllabusFileMeta?.name ?? '',
     extractedSyllabus,
     currentWeek,
-    gradesByWeek: sanitizeGradesByWeek(obj.gradesByWeek),
+    gradesByWeek: resolvedGrades,
     syllabusFileMeta,
   };
 }
@@ -621,9 +660,11 @@ function isQuotaOrModelError(status: number, message: string): boolean {
 }
 
 async function extractSyllabusWeightsWithGemini(
-  file: File
+  file: File,
+  precompressed?: CompressedSyllabusAsset
 ): Promise<{ payload: ExtractedSyllabusPayload; modelUsed: string }> {
-  const { dataUrl, base64Data, mimeType } = await readFileAsBase64(file);
+  const { dataUrl, base64Data, mimeType } =
+    precompressed ?? (await readFileAsBase64(file));
   const candidateKeys = collectConfiguredApiKeys();
   const primaryKey = candidateKeys[0] || '';
   const previewHosted = isPreviewOrServerHosted();
@@ -774,26 +815,86 @@ export const ProbationSafetyMeter: React.FC = () => {
   const [extractionError, setExtractionError] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
 
-  // Auto-save all 4 courses + activeCourseIndex into localStorage whenever state changes
+  // Auto-save all 4 courses + activeCourseIndex into localStorage whenever state changes.
+  // Strictly strips any binary/Base64 blobs and stores only lightweight JSON metadata,
+  // guarded by safeLocalStorageSetItem against QuotaExceededError.
   useEffect(() => {
     if (typeof window === 'undefined') return;
-    try {
-      const payload: PersistedSafetyMeterData = {
-        activeCourseIndex,
-        courses,
-      };
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(payload));
-    } catch {
-      // Ignore storage quota or private-mode errors
-    }
+    const lightweightCourses: CourseSlotState[] = courses.map((c) => ({
+      slotId: c.slotId,
+      courseId: c.slotId,
+      defaultLabel: c.defaultLabel,
+      courseName: c.extractedSyllabus?.courseName ?? '',
+      isParsed: Boolean(c.extractedSyllabus),
+      weights: c.extractedSyllabus?.weights ?? null,
+      weeklyScores: c.gradesByWeek,
+      fileName: c.syllabusFileMeta?.name ?? '',
+      extractedSyllabus: c.extractedSyllabus,
+      currentWeek: c.currentWeek,
+      gradesByWeek: c.gradesByWeek,
+      syllabusFileMeta: c.syllabusFileMeta
+        ? {
+            name: c.syllabusFileMeta.name,
+            type: c.syllabusFileMeta.type,
+            sizeLabel: c.syllabusFileMeta.sizeLabel,
+          }
+        : null,
+    }));
+
+    const payload: PersistedSafetyMeterData = {
+      activeCourseIndex,
+      courses: lightweightCourses,
+    };
+    safeLocalStorageSetItem(STORAGE_KEY, JSON.stringify(payload));
   }, [activeCourseIndex, courses]);
+
+  // Asynchronously hydrate preview object URLs from IndexedDB (`AkariScholarStorageDB`) on mount
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    let isCancelled = false;
+
+    const hydrateStoredSyllabusFiles = async () => {
+      for (const slotId of COURSE_SLOTS) {
+        const storedAsset = await getSyllabusFile(slotId);
+        if (isCancelled || !storedAsset) continue;
+
+        const objectUrl =
+          storedAsset instanceof Blob
+            ? URL.createObjectURL(storedAsset)
+            : typeof storedAsset === 'string'
+            ? storedAsset
+            : null;
+
+        if (objectUrl) {
+          setPreviewUrlsBySlot((prev) => {
+            if (prev[slotId]) {
+              if (objectUrl.startsWith('blob:')) URL.revokeObjectURL(objectUrl);
+              return prev;
+            }
+            return { ...prev, [slotId]: objectUrl };
+          });
+        }
+      }
+    };
+
+    void hydrateStoredSyllabusFiles();
+    return () => {
+      isCancelled = true;
+    };
+  }, []);
 
   useEffect(() => {
     if (typeof window === 'undefined') return;
     const handleWipe = () => {
+      void clearAllSyllabusFiles();
       setActiveCourseIndex(0);
       setCourses(createDefaultCoursesList());
-      setPreviewUrlsBySlot({ 1: null, 2: null, 3: null, 4: null });
+      setPreviewUrlsBySlot((prev) => {
+        Object.values(prev).forEach((url) => {
+          if (url && url.startsWith('blob:')) URL.revokeObjectURL(url);
+        });
+        return { 1: null, 2: null, 3: null, 4: null };
+      });
       setExtractionError(null);
     };
     window.addEventListener('akari_emergency_wipe', handleWipe);
@@ -806,7 +907,7 @@ export const ProbationSafetyMeter: React.FC = () => {
   useEffect(() => {
     return () => {
       Object.values(previewUrlsRef.current).forEach((url) => {
-        if (url) URL.revokeObjectURL(url);
+        if (url && url.startsWith('blob:')) URL.revokeObjectURL(url);
       });
     };
   }, []);
@@ -861,13 +962,41 @@ export const ProbationSafetyMeter: React.FC = () => {
   const runSyllabusExtraction = async (
     file: File,
     targetIndex: number,
-    fileMeta: SyllabusFileMeta
+    slotId: number
   ) => {
     setIsExtractingSyllabus(true);
     setExtractionError(null);
 
     try {
-      const { payload, modelUsed } = await extractSyllabusWeightsWithGemini(file);
+      // 1. Compress image via HTML5 Canvas (<=1280px, 0.75 WebP/JPEG) or preserve PDF Blob
+      const compressedAsset = await compressSyllabusAsset(file, 1280, 0.75);
+
+      // 2. Persist binary Blob in IndexedDB (`AkariScholarStorageDB`) keyed by course slotId (1..4)
+      await saveSyllabusFile(slotId, compressedAsset.blob);
+
+      // 3. Create preview URL from the compressed/stored Blob
+      const isPreviewable =
+        compressedAsset.mimeType.startsWith('image/') ||
+        compressedAsset.mimeType === 'application/pdf';
+      const previewUrl = isPreviewable ? URL.createObjectURL(compressedAsset.blob) : null;
+
+      setPreviewUrlsBySlot((prev) => {
+        const oldUrl = prev[slotId];
+        if (oldUrl && oldUrl.startsWith('blob:')) URL.revokeObjectURL(oldUrl);
+        return { ...prev, [slotId]: previewUrl };
+      });
+
+      const fileMeta: SyllabusFileMeta = {
+        name: file.name,
+        type: compressedAsset.mimeType,
+        sizeLabel: compressedAsset.sizeLabel || formatByteSizeLabel(compressedAsset.sizeBytes),
+      };
+
+      // 4. Dispatch compressed payload to Gemini for grading weight extraction
+      const { payload, modelUsed } = await extractSyllabusWeightsWithGemini(
+        file,
+        compressedAsset
+      );
       const normalizedWeights = normalizeWeightsToExact100(payload);
       const fallbackCourseName =
         file.name.replace(/\.[^.]+$/, '').trim() || `Course ${targetIndex + 1}`;
@@ -877,6 +1006,12 @@ export const ProbationSafetyMeter: React.FC = () => {
           idx === targetIndex
             ? {
                 ...c,
+                courseId: c.slotId,
+                courseName: payload.courseName || fallbackCourseName,
+                isParsed: true,
+                weights: normalizedWeights,
+                weeklyScores: createEmptyGrades(),
+                fileName: fileMeta.name,
                 extractedSyllabus: {
                   courseName: payload.courseName || fallbackCourseName,
                   weights: normalizedWeights,
@@ -926,34 +1061,26 @@ export const ProbationSafetyMeter: React.FC = () => {
     }
 
     const slotId = activeCourse.slotId;
-    const isPreviewable = file.type.startsWith('image/') || file.type === 'application/pdf';
-    const previewUrl = isPreviewable ? URL.createObjectURL(file) : null;
-    const sizeKb = Math.max(1, Math.round(file.size / 1024));
-    const fileMeta: SyllabusFileMeta = {
-      name: file.name,
-      type: file.type,
-      sizeLabel: sizeKb >= 1024 ? `${(sizeKb / 1024).toFixed(1)} MB` : `${sizeKb} KB`,
-    };
-
-    setPreviewUrlsBySlot((prev) => {
-      const oldUrl = prev[slotId];
-      if (oldUrl) URL.revokeObjectURL(oldUrl);
-      return { ...prev, [slotId]: previewUrl };
-    });
-
-    void runSyllabusExtraction(file, activeCourseIndex, fileMeta);
+    void runSyllabusExtraction(file, activeCourseIndex, slotId);
   };
 
   const handleReuploadReset = () => {
     const slotId = activeCourse.slotId;
+    void deleteSyllabusFile(slotId);
+
     setPreviewUrlsBySlot((prev) => {
       const oldUrl = prev[slotId];
-      if (oldUrl) URL.revokeObjectURL(oldUrl);
+      if (oldUrl && oldUrl.startsWith('blob:')) URL.revokeObjectURL(oldUrl);
       return { ...prev, [slotId]: null };
     });
 
     updateActiveCourse((prev) => ({
       ...prev,
+      courseName: '',
+      isParsed: false,
+      weights: null,
+      weeklyScores: createEmptyGrades(),
+      fileName: '',
       extractedSyllabus: null,
       syllabusFileMeta: null,
       gradesByWeek: createEmptyGrades(),

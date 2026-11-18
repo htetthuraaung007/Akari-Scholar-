@@ -11,6 +11,7 @@ import {
   Grade,
 } from '../types';
 import { encryptAndSave, loadAndDecrypt, clearAllLocalData } from '../utils/crypto';
+import { clearAllSyllabusFiles } from '../utils/storageHelper';
 import { calculateSM2, ReviewGrade } from '../utils/sm2';
 import { throttleGuard, LocalInBrowserEngine } from '../utils/engine';
 import {
@@ -577,6 +578,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
   // Panic wipe / Emergency Wipe Master Function
   const panicClearData = async () => {
     await clearAllLocalData();
+    await clearAllSyllabusFiles();
     if (typeof window !== 'undefined') {
       try {
         const keysToRemove: string[] = [];
