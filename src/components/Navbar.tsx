@@ -17,7 +17,11 @@ import {
   X,
 } from 'lucide-react';
 import { PWAInstallButton } from './PWAInstallButton';
-import { getUoPeopleTimeStatus, UoPeopleTimeStatus } from '../utils/uopeopleTime';
+import {
+  getUoPeopleTimeStatus,
+  THURSDAY_EXTENSION_NOTICE_MY,
+  UoPeopleTimeStatus,
+} from '../utils/uopeopleTime';
 
 // Live Dual Clock Badge for Header
 const UoPeopleTimeBadge: React.FC = () => {
@@ -127,7 +131,9 @@ const UoPeopleTimeBadge: React.FC = () => {
                   {language === 'my' ? 'Discussion Assignment Deadline' : 'Discussion Forum Deadline'}
                 </div>
                 <div className="text-[10px] text-slate-400">
-                  {language === 'my' ? 'အပတ်စဉ် တနင်္ဂနွေနေ့ ည ၁၁:၂၅ (11:25 PM UoPeople Time / GMT-5)' : 'Every Sunday 11:25 PM UoPeople Time (GMT-5)'}
+                  {language === 'my'
+                    ? 'အပတ်စဉ် တနင်္ဂနွေနေ့ ည ၁၁:၅၅ (11:55 PM / 23:55 GMT-5)'
+                    : 'Every Sunday 11:55 PM (23:55 GMT-5)'}
                 </div>
               </div>
               <div className="text-right font-mono">
@@ -146,7 +152,9 @@ const UoPeopleTimeBadge: React.FC = () => {
                   {language === 'my' ? 'Assignment Activity Deadline' : 'Assignment Activity Deadline'}
                 </div>
                 <div className="text-[10px] text-slate-400">
-                  {language === 'my' ? 'အပတ်စဉ် ဗုဒ္ဓဟူးနေ့ ည ၁၁:၂၅ (11:25 PM UoPeople Time / GMT-5)' : 'Every Wednesday 11:25 PM UoPeople Time (GMT-5)'}
+                  {language === 'my'
+                    ? 'အပတ်စဉ် ဗုဒ္ဓဟူးနေ့ ည ၁၁:၅၅ (11:55 PM / 23:55 GMT-5)'
+                    : 'Every Wednesday 11:55 PM (23:55 GMT-5)'}
                 </div>
               </div>
               <div className="text-right font-mono">
@@ -157,6 +165,10 @@ const UoPeopleTimeBadge: React.FC = () => {
                   {language === 'my' ? 'ကျန်ရှိ' : 'remaining'}
                 </div>
               </div>
+            </div>
+
+            <div className="p-2 rounded-xl bg-amber-950/30 border border-amber-500/30 text-[10px] text-amber-200/95 leading-relaxed">
+              {THURSDAY_EXTENSION_NOTICE_MY}
             </div>
           </div>
 

@@ -1,12 +1,25 @@
 /**
  * University of the People (UoPeople) Official Time & Device Local Time Utilities
- * Official Deadline Time: 11:25 PM UoPeople Time (GMT-5)
- * Local Device Time: Direct from device OS clock via Intl.DateTimeFormat().resolvedOptions().timeZone
+ * Official Deadline Time: 11:55 PM (23:55 GMT-5)
+ * Local Device Time: Strictly computed from UTC timestamps into the user's device OS timezone
+ *                    without being skewed by VPN tunnels.
  */
 
-import { isCurrentlyTermBreak, resolveLiveAcademicContext } from './uopeopleCalendar';
+import {
+  getRegistrationPeriodContext,
+  isCurrentlyTermBreak,
+  RegistrationPeriodContext,
+  resolveLiveAcademicContext,
+} from './uopeopleCalendar';
 
 export const UOPEOPLE_SUBMISSION_UPDATED_EVENT = 'akari_assignment_submission_updated';
+export const UOPEOPLE_REG_ACK_UPDATED_EVENT = 'akari_registration_ack_updated';
+
+export const THURSDAY_EXTENSION_NOTICE_MY =
+  '⚠️ သတိပြုရန်: အချို့သော Course များတွင် Assignment Activity ကို Thursday 11:55 PM (UoPeople Time) အထိ ပေးထားတတ်သဖြင့် မိမိ Course ၏ Moodle/Syllabus တွင် ပြန်လည်စစ်ဆေးပါ။';
+
+export const REGISTRATION_CLARIFICATION_NOTICE_MY =
+  'ℹ️ Course Registration ကာလ စတင်ချိန်သည် ကျောင်းသားတစ်ယောက်ချင်းစီအလိုက် ကွဲပြားနိုင်သဖြင့် မိမိ၏ သတ်မှတ်ချိန် အတိအကျကို Student Portal (https://portal.uopeople.edu/login) တွင် ဝင်ရောက်စစ်ဆေးပါ။';
 
 export interface UoPeopleTimeStatus {
   uopFormattedTime: string;
@@ -20,6 +33,14 @@ export interface UoPeopleTimeStatus {
   isTermBreak: boolean;
   activeWeekNumber: number;
   isCurrentWeekAssignmentSubmitted: boolean;
+  registrationContext: RegistrationPeriodContext;
+  isRegistrationAcknowledged: boolean;
+  activeRegistrationAlert: {
+    phase: '24h' | '12h' | 'open';
+    message: string;
+    targetTermKey: string;
+    targetTermName: string;
+  } | null;
   activeDeadlineAlert: {
     type: 'discussion' | 'activity';
     title: string;
@@ -34,17 +55,36 @@ export interface UoPeopleTimeStatus {
   } | null;
 }
 
-// Convert a Date to UoPeople Time (GMT-5)
+/**
+ * Computes a Date whose local getters represent UoPeople wall-clock (GMT-5) cleanly,
+ * derived directly from UTC epoch without VPN/DST distortion.
+ */
 export function getUoPeopleDate(date: Date = new Date()): Date {
   const utc = date.getTime() + date.getTimezoneOffset() * 60000;
   return new Date(utc - 5 * 3600000);
 }
 
-// Format time in UoPeople GMT-5
+/**
+ * Returns pure UTC-5 wall-clock components directly from epoch milliseconds
+ * so deadline math is 100% immune to device timezone changes or VPN routing.
+ */
+function getPureGmt5Components(date: Date = new Date()) {
+  const shifted = new Date(date.getTime() - 5 * 3600000);
+  return {
+    year: shifted.getUTCFullYear(),
+    month: shifted.getUTCMonth(),
+    dayOfMonth: shifted.getUTCDate(),
+    dayOfWeek: shifted.getUTCDay(), // 0 = Sun, 3 = Wed
+    hour: shifted.getUTCHours(),
+    minute: shifted.getUTCMinutes(),
+  };
+}
+
+// Format time in UoPeople GMT-5 (fixed Etc/GMT+5 i.e. permanent UTC-5)
 export function formatUoPTime(date: Date = new Date()): string {
   try {
     return date.toLocaleTimeString('en-US', {
-      timeZone: 'America/New_York',
+      timeZone: 'Etc/GMT+5',
       hour: '2-digit',
       minute: '2-digit',
       hour12: true,
@@ -59,7 +99,25 @@ export function formatUoPTime(date: Date = new Date()): string {
   }
 }
 
-// Format local phone/device time
+// Format time in UoPeople GMT-5 date label
+export function formatUoPDate(date: Date = new Date()): string {
+  try {
+    return date.toLocaleDateString('en-US', {
+      timeZone: 'Etc/GMT+5',
+      weekday: 'short',
+      month: 'short',
+      day: 'numeric',
+    });
+  } catch {
+    return getUoPeopleDate(date).toLocaleDateString('en-US', {
+      weekday: 'short',
+      month: 'short',
+      day: 'numeric',
+    });
+  }
+}
+
+// Format local phone/device time strictly in device OS timezone
 export function formatLocalDeviceTime(date: Date = new Date()): string {
   return date.toLocaleTimeString([], {
     hour: '2-digit',
@@ -105,74 +163,103 @@ export function getActiveAcademicWeekNumber(now: Date = new Date()): number {
   return 1;
 }
 
-// Standardized submission key: 'akari_assignment_submitted_wX'
-export function getAssignmentSubmittedKey(weekNumber: number): string {
-  const clamped = Math.min(9, Math.max(1, Math.round(weekNumber) || 1));
-  return `akari_assignment_submitted_w${clamped}`;
+// Standardized submission key: 'akari_submitted_unit_[X]'
+export function getAssignmentSubmittedKey(unitNumber: number): string {
+  const clamped = Math.min(9, Math.max(1, Math.round(unitNumber) || 1));
+  return `akari_submitted_unit_${clamped}`;
 }
 
-// Check if assignment for week X is marked as submitted
-export function isWeekAssignmentSubmitted(weekNumber: number): boolean {
+// Check if assignment for unit X is marked as submitted
+export function isWeekAssignmentSubmitted(unitNumber: number): boolean {
   if (typeof window === 'undefined') return false;
   try {
-    const key = getAssignmentSubmittedKey(weekNumber);
-    return window.localStorage.getItem(key) === 'true';
+    const clamped = Math.min(9, Math.max(1, Math.round(unitNumber) || 1));
+    const unitKey = `akari_submitted_unit_${clamped}`;
+    const legacyWeekKey = `akari_assignment_submitted_w${clamped}`;
+    return (
+      window.localStorage.getItem(unitKey) === 'true' ||
+      window.localStorage.getItem(legacyWeekKey) === 'true'
+    );
   } catch {
     return false;
   }
 }
 
-// Calculate next upcoming Sunday 11:25 PM (23:25:00) in UoPeople Time (GMT-5)
-export function getNextDiscussionDeadline(now: Date = new Date()): Date {
-  const uopNow = getUoPeopleDate(now);
-  const uopDay = uopNow.getDay(); // 0 is Sunday
+// Registration Period acknowledgment key per term
+export function getRegistrationAckKey(targetTermKey: string): string {
+  return `akari_reg_ack_${targetTermKey}`;
+}
 
-  let daysUntilSunday = (7 - uopDay) % 7;
+export function isRegistrationAcknowledged(targetTermKey: string): boolean {
+  if (typeof window === 'undefined') return false;
+  try {
+    return window.localStorage.getItem(getRegistrationAckKey(targetTermKey)) === 'true';
+  } catch {
+    return false;
+  }
+}
+
+export function confirmRegistrationAcknowledgment(targetTermKey: string): void {
+  if (typeof window === 'undefined') return;
+  try {
+    window.localStorage.setItem(getRegistrationAckKey(targetTermKey), 'true');
+    window.localStorage.setItem(`akari_reg_notified_24h_${targetTermKey}`, 'suppressed');
+    window.localStorage.setItem(`akari_reg_notified_12h_${targetTermKey}`, 'suppressed');
+    window.localStorage.setItem(`akari_reg_notified_open_${targetTermKey}`, 'suppressed');
+    window.dispatchEvent(
+      new CustomEvent(UOPEOPLE_REG_ACK_UPDATED_EVENT, {
+        detail: { targetTermKey, acknowledged: true },
+      })
+    );
+  } catch (err) {
+    console.warn('Failed to persist registration acknowledgment:', err);
+  }
+}
+
+// Calculate next upcoming Sunday 11:55 PM (23:55:00 GMT-5) — Discussion Forum Deadline
+export function getNextDiscussionDeadline(now: Date = new Date()): Date {
+  const gmt5 = getPureGmt5Components(now);
+  let daysUntilSunday = (7 - gmt5.dayOfWeek) % 7;
   if (
     daysUntilSunday === 0 &&
-    (uopNow.getHours() > 23 || (uopNow.getHours() === 23 && uopNow.getMinutes() >= 25))
+    (gmt5.hour > 23 || (gmt5.hour === 23 && gmt5.minute >= 55))
   ) {
     daysUntilSunday = 7;
   }
 
-  const targetUopDate = new Date(uopNow);
-  targetUopDate.setDate(uopNow.getDate() + daysUntilSunday);
-  targetUopDate.setHours(23, 25, 0, 0);
-
-  const offsetDiffMs = now.getTime() - uopNow.getTime();
-  return new Date(targetUopDate.getTime() + offsetDiffMs);
+  // Exact UTC timestamp corresponding to 23:55:00 GMT-5 (+5h from GMT-5 = next day 04:55 UTC)
+  const targetUtcMs =
+    Date.UTC(gmt5.year, gmt5.month, gmt5.dayOfMonth + daysUntilSunday, 23, 55, 0, 0) +
+    5 * 3600000;
+  return new Date(targetUtcMs);
 }
 
-// Calculate next upcoming Wednesday 11:25 PM (23:25:00) in UoPeople Time (GMT-5)
+// Calculate next upcoming Wednesday 11:55 PM (23:55:00 GMT-5) — Assignment Activity Deadline
 export function getNextActivityDeadline(now: Date = new Date()): Date {
-  const uopNow = getUoPeopleDate(now);
-  const uopDay = uopNow.getDay(); // 3 is Wednesday
-
-  let daysUntilWed = (3 - uopDay + 7) % 7;
+  const gmt5 = getPureGmt5Components(now);
+  let daysUntilWed = (3 - gmt5.dayOfWeek + 7) % 7;
   if (
     daysUntilWed === 0 &&
-    (uopNow.getHours() > 23 || (uopNow.getHours() === 23 && uopNow.getMinutes() >= 25))
+    (gmt5.hour > 23 || (gmt5.hour === 23 && gmt5.minute >= 55))
   ) {
     daysUntilWed = 7;
   }
 
-  const targetUopDate = new Date(uopNow);
-  targetUopDate.setDate(uopNow.getDate() + daysUntilWed);
-  targetUopDate.setHours(23, 25, 0, 0);
-
-  const offsetDiffMs = now.getTime() - uopNow.getTime();
-  return new Date(targetUopDate.getTime() + offsetDiffMs);
+  const targetUtcMs =
+    Date.UTC(gmt5.year, gmt5.month, gmt5.dayOfMonth + daysUntilWed, 23, 55, 0, 0) +
+    5 * 3600000;
+  return new Date(targetUtcMs);
 }
 
-// Generate weekly deadline unique key e.g. "akari_assignment_submitted_w1"
+// Generate weekly deadline unique key e.g. "akari_submitted_unit_1"
 export function getDeadlineUniqueKey(
   type: 'discussion' | 'activity',
   targetDate: Date,
-  weekNum?: number
+  unitNum?: number
 ): string {
   if (type === 'activity') {
-    const activeWeek = weekNum ?? getActiveAcademicWeekNumber();
-    return getAssignmentSubmittedKey(activeWeek);
+    const activeUnit = unitNum ?? getActiveAcademicWeekNumber();
+    return getAssignmentSubmittedKey(activeUnit);
   }
   const year = targetDate.getFullYear();
   const firstDayOfYear = new Date(year, 0, 1);
@@ -198,32 +285,32 @@ export function setUoPeopleTermMode(mode: UoPeopleTermMode) {
 }
 
 // Check if user confirmed submission for this deadline
-export function isDeadlineSubmitted(deadlineKey: string, weekNumber?: number): boolean {
+export function isDeadlineSubmitted(deadlineKey: string, unitNumber?: number): boolean {
   if (typeof window === 'undefined') return false;
-  if (weekNumber !== undefined && isWeekAssignmentSubmitted(weekNumber)) {
+  if (unitNumber !== undefined && isWeekAssignmentSubmitted(unitNumber)) {
     return true;
   }
   const raw = localStorage.getItem(deadlineKey);
   return raw === 'true' || raw === 'confirmed';
 }
 
-// Permanently mark week's assignment as submitted and cancel/suppress remaining 24h/12h notifications
-export function confirmDeadlineSubmission(deadlineKey: string, weekNumber?: number) {
+// Permanently mark unit's assignment as submitted and suppress remaining 24h/12h notifications
+export function confirmDeadlineSubmission(deadlineKey: string, unitNumber?: number) {
   if (typeof window === 'undefined') return;
-  const resolvedWeek = weekNumber ?? getActiveAcademicWeekNumber();
-  const weekKey = getAssignmentSubmittedKey(resolvedWeek);
+  const resolvedUnit = Math.min(9, Math.max(1, unitNumber ?? getActiveAcademicWeekNumber()));
+  const unitKey = getAssignmentSubmittedKey(resolvedUnit);
 
   try {
-    localStorage.setItem(weekKey, 'true');
-    if (deadlineKey) {
+    localStorage.setItem(unitKey, 'true');
+    if (deadlineKey && deadlineKey !== unitKey) {
       localStorage.setItem(deadlineKey, 'true');
     }
-    // Permanently suppress 24h and 12h notifications for this week
-    localStorage.setItem(`akari_notified_24h_w${resolvedWeek}`, 'suppressed');
-    localStorage.setItem(`akari_notified_12h_w${resolvedWeek}`, 'suppressed');
+    // Permanently suppress 24h and 12h notifications for this unit
+    localStorage.setItem(`akari_notified_24h_w${resolvedUnit}`, 'suppressed');
+    localStorage.setItem(`akari_notified_12h_w${resolvedUnit}`, 'suppressed');
     window.dispatchEvent(
       new CustomEvent(UOPEOPLE_SUBMISSION_UPDATED_EVENT, {
-        detail: { weekNumber: resolvedWeek, submitted: true },
+        detail: { weekNumber: resolvedUnit, submitted: true },
       })
     );
   } catch (err) {
@@ -232,15 +319,54 @@ export function confirmDeadlineSubmission(deadlineKey: string, weekNumber?: numb
 }
 
 /**
- * Triggers localized Web Notification API alert at 24h and 12h before the Wednesday 11:25 PM UoPeople deadline
- * if the week's assignment is not yet marked as submitted.
+ * Cross-platform Native OS Notification dispatcher:
+ * Uses ServiceWorkerRegistration.showNotification when active (Android/iOS PWA),
+ * and falls back cleanly to `new Notification(...)` on desktop Chrome/Edge/Safari/Mac/Windows.
+ */
+export function dispatchNativeOsNotification(
+  title: string,
+  body: string,
+  tag: string
+): void {
+  if (typeof window === 'undefined' || !('Notification' in window)) return;
+  if (Notification.permission !== 'granted') return;
+
+  try {
+    if ('serviceWorker' in navigator && navigator.serviceWorker.controller) {
+      void navigator.serviceWorker.ready
+        .then((registration) => {
+          if (registration && typeof registration.showNotification === 'function') {
+            return registration.showNotification(title, {
+              body,
+              tag,
+              icon: '/icon-192.png',
+              badge: '/icon-192.png',
+            });
+          }
+          new Notification(title, { body, tag });
+          return undefined;
+        })
+        .catch(() => {
+          new Notification(title, { body, tag });
+        });
+    } else {
+      new Notification(title, { body, tag });
+    }
+  } catch {
+    // Ignore restricted notification environments
+  }
+}
+
+/**
+ * Triggers native OS & Web Notification at 24h and 12h before the Wednesday 11:55 PM UoPeople deadline
+ * if the unit's assignment is not yet marked as submitted (`akari_submitted_unit_[X]`).
  */
 export function maybeDispatchAssignmentBrowserNotification(
-  weekNumber: number,
+  unitNumber: number,
   remainingMs: number
 ): void {
   if (typeof window === 'undefined' || !('Notification' in window)) return;
-  if (isWeekAssignmentSubmitted(weekNumber)) return;
+  if (isWeekAssignmentSubmitted(unitNumber)) return;
 
   const msIn24h = 24 * 3600000;
   const msIn12h = 12 * 3600000;
@@ -249,23 +375,20 @@ export function maybeDispatchAssignmentBrowserNotification(
 
   const is12hWindow = remainingMs <= msIn12h;
   const notifyKey = is12hWindow
-    ? `akari_notified_12h_w${weekNumber}`
-    : `akari_notified_24h_w${weekNumber}`;
+    ? `akari_notified_12h_w${unitNumber}`
+    : `akari_notified_24h_w${unitNumber}`;
 
   try {
     if (window.localStorage.getItem(notifyKey)) {
-      return; // Already notified or suppressed for this threshold in week X
+      return; // Already notified or suppressed
     }
 
     const message = is12hWindow
-      ? '🚨 သတိပေးချက်: Assignment Activity တင်ရန် နောက်ဆုံးသတ်မှတ်ချိန် ၁၂ နာရီသာ လိုပါတော့သည်။'
-      : '📢 သတိပေးချက်: Assignment Activity တင်ရန် ၂၄ နာရီသာ လိုပါတော့သည်။';
+      ? '🚨 သတိပြုရန်: Assignment Activity Deadline နီးကပ်နေပါပြီ (၁၂ နာရီသာ လိုပါတော့သည်)'
+      : '⏰ Assignment Activity တင်ရန် ၂၄ နာရီသာ လိုပါတော့သည်';
 
     if (Notification.permission === 'granted') {
-      new Notification('UoPeople Assignment Activity Deadline', {
-        body: message,
-        tag: notifyKey,
-      });
+      dispatchNativeOsNotification('UoPeople Assignment Activity Deadline', message, notifyKey);
       window.localStorage.setItem(notifyKey, 'sent');
     }
   } catch {
@@ -274,9 +397,79 @@ export function maybeDispatchAssignmentBrowserNotification(
 }
 
 /**
+ * Triggers native OS & Web Notification for Course Registration milestones:
+ * - 24h before open
+ * - 12h before open
+ * - On Open Day / active open window
+ */
+export function maybeDispatchRegistrationBrowserNotification(
+  regContext: RegistrationPeriodContext
+): {
+  phase: '24h' | '12h' | 'open';
+  message: string;
+  targetTermKey: string;
+  targetTermName: string;
+} | null {
+  if (isRegistrationAcknowledged(regContext.targetTermKey)) return null;
+
+  const msIn24h = 24 * 3600000;
+  const msIn12h = 12 * 3600000;
+
+  let phase: '24h' | '12h' | 'open' | null = null;
+  let message = '';
+  let notifyKey = '';
+
+  if (regContext.isOpenNow) {
+    phase = 'open';
+    message =
+      '📢 Course Registration စတင်ဖွင့်လှစ်ပါပြီ။ Portal တွင် ဘာသာရပ်များ စာရင်းသွင်းနိုင်ပါပြီ။';
+    notifyKey = `akari_reg_notified_open_${regContext.targetTermKey}`;
+  } else if (
+    regContext.isUpcoming &&
+    regContext.remainingMs > 0 &&
+    regContext.remainingMs <= msIn12h
+  ) {
+    phase = '12h';
+    message = '🚨 သတိပြုရန်: Course Registration ဖွင့်ရန် ၁၂ နာရီသာ လိုပါတော့သည်။';
+    notifyKey = `akari_reg_notified_12h_${regContext.targetTermKey}`;
+  } else if (
+    regContext.isUpcoming &&
+    regContext.remainingMs > msIn12h &&
+    regContext.remainingMs <= msIn24h
+  ) {
+    phase = '24h';
+    message =
+      '⏰ Course Registration ဖွင့်ရန် ၂၄ နာရီသာ လိုပါတော့သည်။ Portal တွင် မိမိ စတင်ချိန်ကို စစ်ဆေးထားပါ။';
+    notifyKey = `akari_reg_notified_24h_${regContext.targetTermKey}`;
+  }
+
+  if (!phase) return null;
+
+  if (typeof window !== 'undefined' && 'Notification' in window) {
+    try {
+      if (!window.localStorage.getItem(notifyKey) && Notification.permission === 'granted') {
+        dispatchNativeOsNotification('UoPeople Course Registration', message, notifyKey);
+        window.localStorage.setItem(notifyKey, 'sent');
+      }
+    } catch {
+      // Ignore notification errors
+    }
+  }
+
+  return {
+    phase,
+    message,
+    targetTermKey: regContext.targetTermKey,
+    targetTermName: regContext.targetTermName,
+  };
+}
+
+/**
  * Requests Web Notification permission gracefully when user interacts with calendar notifications.
  */
-export async function requestDeadlineNotificationPermission(): Promise<NotificationPermission | 'unsupported'> {
+export async function requestDeadlineNotificationPermission(): Promise<
+  NotificationPermission | 'unsupported'
+> {
   if (typeof window === 'undefined' || !('Notification' in window)) {
     return 'unsupported';
   }
@@ -290,14 +483,17 @@ export async function requestDeadlineNotificationPermission(): Promise<Notificat
   }
 }
 
-// Compute full status and active reminder notification
-export function getUoPeopleTimeStatus(explicitWeekNumber?: number): UoPeopleTimeStatus & { isTermBreak: boolean } {
+// Compute full status and active reminder notifications
+export function getUoPeopleTimeStatus(
+  explicitUnitNumber?: number
+): UoPeopleTimeStatus & { isTermBreak: boolean } {
   const now = new Date();
   const uopFormattedTime = formatUoPTime(now);
+  const uopFormattedDate = formatUoPDate(now);
   const localFormattedTime = formatLocalDeviceTime(now);
   const localTimezone = getLocalDeviceTimezone();
   const isTermBreak = isCurrentlyTermBreak(now);
-  const activeWeekNumber = explicitWeekNumber ?? getActiveAcademicWeekNumber(now);
+  const activeWeekNumber = explicitUnitNumber ?? getActiveAcademicWeekNumber(now);
 
   const discDeadline = getNextDiscussionDeadline(now);
   const actDeadline = getNextActivityDeadline(now);
@@ -307,6 +503,10 @@ export function getUoPeopleTimeStatus(explicitWeekNumber?: number): UoPeopleTime
 
   const actKey = getAssignmentSubmittedKey(activeWeekNumber);
   const actSubmitted = isWeekAssignmentSubmitted(activeWeekNumber);
+
+  const registrationContext = getRegistrationPeriodContext(now);
+  const regAcked = isRegistrationAcknowledged(registrationContext.targetTermKey);
+  const activeRegistrationAlert = maybeDispatchRegistrationBrowserNotification(registrationContext);
 
   let activeAlert: UoPeopleTimeStatus['activeDeadlineAlert'] = null;
 
@@ -322,8 +522,8 @@ export function getUoPeopleTimeStatus(explicitWeekNumber?: number): UoPeopleTime
       const isUrgent12h = activityRemainingMs <= msIn12h;
 
       const alertBannerText = isUrgent12h
-        ? '🚨 သတိပေးချက်: Assignment Activity တင်ရန် နောက်ဆုံးသတ်မှတ်ချိန် ၁၂ နာရီသာ လိုပါတော့သည်။'
-        : '📢 သတိပေးချက်: Assignment Activity တင်ရန် ၂၄ နာရီသာ လိုပါတော့သည်။';
+        ? '🚨 သတိပြုရန်: Assignment Activity Deadline နီးကပ်နေပါပြီ (၁၂ နာရီသာ လိုပါတော့သည်)'
+        : '⏰ Assignment Activity တင်ရန် ၂၄ နာရီသာ လိုပါတော့သည်';
 
       maybeDispatchAssignmentBrowserNotification(activeWeekNumber, activityRemainingMs);
 
@@ -333,7 +533,7 @@ export function getUoPeopleTimeStatus(explicitWeekNumber?: number): UoPeopleTime
         alertBannerText,
         remainingHours: hours,
         remainingMins: mins,
-        uopDeadlineStr: 'Wednesday 11:25 PM UoPeople Time (GMT-5)',
+        uopDeadlineStr: 'Wednesday 11:55 PM (23:55 GMT-5)',
         localDeadlineStr: `${actDeadline.toLocaleDateString([], {
           weekday: 'short',
           month: 'short',
@@ -348,16 +548,15 @@ export function getUoPeopleTimeStatus(explicitWeekNumber?: number): UoPeopleTime
 
   return {
     uopFormattedTime,
-    uopFormattedDate: getUoPeopleDate(now).toLocaleDateString('en-US', {
-      weekday: 'short',
-      month: 'short',
-      day: 'numeric',
-    }),
+    uopFormattedDate,
     localFormattedTime,
     localTimezone,
     isTermBreak,
     activeWeekNumber,
     isCurrentWeekAssignmentSubmitted: actSubmitted,
+    registrationContext,
+    isRegistrationAcknowledged: regAcked,
+    activeRegistrationAlert,
     nextDiscussionDeadline: discDeadline,
     nextActivityDeadline: actDeadline,
     discussionRemainingMs,

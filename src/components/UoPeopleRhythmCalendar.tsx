@@ -3,16 +3,25 @@ import { useApp } from '../context/AppContext';
 import {
   resolveLiveAcademicContext,
   getCurrentAcademicState,
+  getRegistrationPeriodContext,
   UOPEOPLE_TERMS_2026_2027,
   AcademicTerm,
 } from '../utils/uopeopleCalendar';
 import { downloadTermIcs, getGoogleCalendarWebUrl } from '../utils/icsGenerator';
 import {
   confirmDeadlineSubmission,
+  confirmRegistrationAcknowledgment,
   getAssignmentSubmittedKey,
+  getNextActivityDeadline,
+  getNextDiscussionDeadline,
+  isRegistrationAcknowledged,
   isWeekAssignmentSubmitted,
   maybeDispatchAssignmentBrowserNotification,
+  maybeDispatchRegistrationBrowserNotification,
+  REGISTRATION_CLARIFICATION_NOTICE_MY,
   requestDeadlineNotificationPermission,
+  THURSDAY_EXTENSION_NOTICE_MY,
+  UOPEOPLE_REG_ACK_UPDATED_EVENT,
   UOPEOPLE_SUBMISSION_UPDATED_EVENT,
 } from '../utils/uopeopleTime';
 import { AcademicCalendarHeader } from './AcademicCalendarHeader';
@@ -33,7 +42,6 @@ import {
   Bell,
   X,
   ExternalLink,
-  HelpCircle,
   Lightbulb,
 } from 'lucide-react';
 
@@ -153,16 +161,16 @@ const UOPEOPLE_SCHEDULE: DaySchedule[] = [
     dayName: 'Sunday',
     burmeseDay: 'တနင်္ဂနွေနေ့ (Discussion Forum Deadline ရက်)',
     uopeopleDayIndex: 3,
-    phaseTitle: '🚨 Discussion Initial Post Deadline (11:25 PM UoPeople Time)',
+    phaseTitle: '🚨 Discussion Initial Post Deadline (11:55 PM / 23:55 GMT-5)',
     phaseBurmese: 'Discussion ပထမဆုံး အဖြေ တင်သွင်းရန် နောက်ဆုံးအချိန်',
     color: 'from-amber-600/25 border-amber-500/50 text-amber-300',
-    deadlineWarning: 'Discussion Forum Initial Post Deadline at 11:25 PM UoPeople Time (GMT-5)',
-    deadlineGmt5Time: '11:25 PM UoPeople Time (GMT-5)',
+    deadlineWarning: 'Discussion Forum Initial Post Deadline at 11:55 PM (23:55 GMT-5)',
+    deadlineGmt5Time: '11:55 PM (23:55 GMT-5)',
     tasks: [
       {
         id: 'sun-1',
-        text: 'Submit Discussion Forum Initial Post before 11:25 PM UoPeople Time (GMT-5)',
-        burmeseText: 'Discussion Forum အဖြေအား နောက်ဆုံးသတ်မှတ်ချိန် 11:25 PM UoPeople Time (GMT-5) မတိုင်မီ တင်သွင်းခြင်း',
+        text: 'Submit Discussion Forum Initial Post before 11:55 PM (23:55 GMT-5)',
+        burmeseText: 'Discussion Forum အဖြေအား နောက်ဆုံးသတ်မှတ်ချိန် 11:55 PM (23:55 GMT-5) မတိုင်မီ တင်သွင်းခြင်း',
         recommendedHours: 0.5,
         category: 'discussion',
       },
@@ -241,23 +249,23 @@ const UOPEOPLE_SCHEDULE: DaySchedule[] = [
     dayName: 'Wednesday',
     burmeseDay: 'ဗုဒ္ဓဟူးနေ့ (နောက်ဆုံး သတ်မှတ်ရက် Final Deadline)',
     uopeopleDayIndex: 6,
-    phaseTitle: '🚨 FINAL SUBMISSION DEADLINE (11:25 PM UoPeople Time / GMT-5)',
+    phaseTitle: '🚨 FINAL SUBMISSION DEADLINE (11:55 PM / 23:55 GMT-5)',
     phaseBurmese: 'ရက်သတ္တပတ် ပြီးဆုံးခြင်းနှင့် နောက်ဆုံး တင်သွင်းရမည့် အချိန်',
     color: 'from-rose-600/30 border-rose-500/60 text-rose-300',
-    deadlineWarning: 'CRITICAL DEADLINE: All Assignments & Quizzes due at 11:25 PM UoPeople Time (GMT-5)',
-    deadlineGmt5Time: '11:25 PM UoPeople Time (GMT-5)',
+    deadlineWarning: 'CRITICAL DEADLINE: All Assignments & Quizzes due at 11:55 PM (23:55 GMT-5)',
+    deadlineGmt5Time: '11:55 PM (23:55 GMT-5)',
     tasks: [
       {
         id: 'wed-1',
-        text: 'Submit Assignment Activity in Word (.docx) / PDF format before 11:25 PM UoPeople Time (GMT-5)',
-        burmeseText: 'Assignment Activity ဖိုင်အား 11:25 PM UoPeople Time (GMT-5) မတိုင်မီ တင်သွင်းခြင်း',
+        text: 'Submit Assignment Activity in Word (.docx) / PDF format before 11:55 PM (23:55 GMT-5)',
+        burmeseText: 'Assignment Activity ဖိုင်အား 11:55 PM (23:55 GMT-5) မတိုင်မီ တင်သွင်းခြင်း',
         recommendedHours: 0.5,
         category: 'assignment',
       },
       {
         id: 'wed-2',
-        text: 'Verify all Discussion Peer Replies and Assessments before 11:25 PM UoPeople Time (GMT-5)',
-        burmeseText: 'Discussion Peer Replies နှင့် Assessments အားလုံး 11:25 PM UoPeople Time (GMT-5) မတိုင်မီ စစ်ဆေးတင်သွင်းခြင်း',
+        text: 'Verify all Discussion Peer Replies and Assessments before 11:55 PM (23:55 GMT-5)',
+        burmeseText: 'Discussion Peer Replies နှင့် Assessments အားလုံး 11:55 PM (23:55 GMT-5) မတိုင်မီ စစ်ဆေးတင်သွင်းခြင်း',
         recommendedHours: 0.5,
         category: 'peer',
       },
@@ -299,6 +307,10 @@ export const UoPeopleRhythmCalendar: React.FC = () => {
     return getCurrentAcademicState(now);
   }, [now]);
 
+  const registrationContext = useMemo(() => {
+    return getRegistrationPeriodContext(now);
+  }, [now]);
+
   // Selected Unit (1 to 9)
   const [currentUnit, setCurrentUnit] = usePersistentState<number>(
     'uopeople_current_unit',
@@ -307,17 +319,30 @@ export const UoPeopleRhythmCalendar: React.FC = () => {
 
   const [showBreakPreview, setShowBreakPreview] = useState(false);
   const [showIcsModal, setShowIcsModal] = useState(false);
-  const [showSubmitConfirmModal, setShowSubmitConfirmModal] = useState(false);
+  const [isConfirmingAssignment, setIsConfirmingAssignment] = useState(false);
+  const [isConfirmingRegistration, setIsConfirmingRegistration] = useState(false);
   const [selectedExportTerm, setSelectedExportTerm] = useState<AcademicTerm>(
     academicState.activeTerm
   );
 
-  // Track whether current week's Assignment Activity is marked as submitted (`akari_assignment_submitted_wX`)
+  const [notificationPermission, setNotificationPermission] = useState<string>(() =>
+    typeof window !== 'undefined' && 'Notification' in window
+      ? Notification.permission
+      : 'unsupported'
+  );
+
+  // Track whether current unit's Assignment Activity is marked as submitted (`akari_submitted_unit_[X]`)
   const [isCurrentUnitSubmitted, setIsCurrentUnitSubmitted] = useState<boolean>(() =>
     isWeekAssignmentSubmitted(currentUnit)
   );
 
+  // Track whether registration period is acknowledged for target term
+  const [isRegAcked, setIsRegAcked] = useState<boolean>(() =>
+    isRegistrationAcknowledged(registrationContext.targetTermKey)
+  );
+
   useEffect(() => {
+    setIsConfirmingAssignment(false);
     const syncSubmittedFlag = () => {
       setIsCurrentUnitSubmitted(isWeekAssignmentSubmitted(currentUnit));
     };
@@ -331,6 +356,21 @@ export const UoPeopleRhythmCalendar: React.FC = () => {
       window.removeEventListener('akari_emergency_wipe', syncSubmittedFlag);
     };
   }, [currentUnit]);
+
+  useEffect(() => {
+    const syncRegFlag = () => {
+      setIsRegAcked(isRegistrationAcknowledged(registrationContext.targetTermKey));
+    };
+    syncRegFlag();
+    window.addEventListener(UOPEOPLE_REG_ACK_UPDATED_EVENT, syncRegFlag);
+    window.addEventListener('storage', syncRegFlag);
+    window.addEventListener('akari_emergency_wipe', syncRegFlag);
+    return () => {
+      window.removeEventListener(UOPEOPLE_REG_ACK_UPDATED_EVENT, syncRegFlag);
+      window.removeEventListener('storage', syncRegFlag);
+      window.removeEventListener('akari_emergency_wipe', syncRegFlag);
+    };
+  }, [registrationContext.targetTermKey]);
 
   // Sync selected export term when academicState changes
   useEffect(() => {
@@ -354,12 +394,29 @@ export const UoPeopleRhythmCalendar: React.FC = () => {
   };
 
   const localTimezone = useMemo(() => {
-    return Intl.DateTimeFormat().resolvedOptions().timeZone || 'Asia/Yangon';
+    return Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC';
   }, []);
 
-  const uopeopleDate = useMemo(() => {
-    const utcMs = now.getTime() + now.getTimezoneOffset() * 60000;
-    return new Date(utcMs - 5 * 3600000);
+  // VPN-independent pure UTC-5 wall clock
+  const uopeopleWallClock = useMemo(() => {
+    const shifted = new Date(now.getTime() - 5 * 3600000);
+    return {
+      dayOfWeek: shifted.getUTCDay(), // 0=Sun..6=Sat
+      timeLabel: now.toLocaleTimeString('en-US', {
+        timeZone: 'Etc/GMT+5',
+        hour: '2-digit',
+        minute: '2-digit',
+        second: '2-digit',
+        hour12: true,
+      }),
+      dateLabel: now.toLocaleDateString('en-US', {
+        timeZone: 'Etc/GMT+5',
+        weekday: 'short',
+        month: 'short',
+        day: 'numeric',
+        year: 'numeric',
+      }),
+    };
   }, [now]);
 
   const timezoneOffsetHours = useMemo(() => {
@@ -369,94 +426,74 @@ export const UoPeopleRhythmCalendar: React.FC = () => {
   }, [now]);
 
   const uopeopleAcademicDayIndex = useMemo(() => {
-    const day = uopeopleDate.getDay();
     const map = [3, 4, 5, 6, 0, 1, 2];
-    return map[day];
-  }, [uopeopleDate]);
+    return map[uopeopleWallClock.dayOfWeek];
+  }, [uopeopleWallClock.dayOfWeek]);
 
-  // Countdown to Wednesday 11:25 PM UoPeople Time (23:25:00 GMT-5)
+  // Pure UTC-anchored deadline timestamps (11:55 PM / 23:55 GMT-5)
+  const nextWedDeadline = useMemo(() => getNextActivityDeadline(now), [now]);
+  const nextSunDeadline = useMemo(() => getNextDiscussionDeadline(now), [now]);
+
+  // Countdown to Wednesday 11:55 PM (23:55 GMT-5)
   const countdownToWednesday = useMemo(() => {
-    const year = uopeopleDate.getFullYear();
-    const month = uopeopleDate.getMonth();
-    const date = uopeopleDate.getDate();
-    const day = uopeopleDate.getDay();
-
-    let daysUntilWed = (3 - day + 7) % 7;
-    const currentHour = uopeopleDate.getHours();
-    const currentMin = uopeopleDate.getMinutes();
-    if (day === 3 && (currentHour > 23 || (currentHour === 23 && currentMin >= 25))) {
-      daysUntilWed = 7;
-    }
-
-    const targetGmt5 = new Date(year, month, date + daysUntilWed, 23, 25, 0);
-    const diffMs = targetGmt5.getTime() - uopeopleDate.getTime();
-
+    const diffMs = nextWedDeadline.getTime() - now.getTime();
     if (diffMs <= 0) {
       return { days: 0, hours: 0, minutes: 0, seconds: 0, totalMs: 0, totalHours: 0 };
     }
-
     const seconds = Math.floor((diffMs / 1000) % 60);
     const minutes = Math.floor((diffMs / (1000 * 60)) % 60);
     const hours = Math.floor((diffMs / (1000 * 60 * 60)) % 24);
     const days = Math.floor(diffMs / (1000 * 60 * 60 * 24));
     const totalHours = diffMs / (1000 * 60 * 60);
-
     return { days, hours, minutes, seconds, totalMs: diffMs, totalHours };
-  }, [uopeopleDate]);
+  }, [nextWedDeadline, now]);
 
-  // Trigger localized Web Notification at 24h / 12h if unsubmitted
+  // Trigger native OS notifications at 24h / 12h for Assignment Activity & Registration Period
   useEffect(() => {
-    if (academicContext.isTermBreak || isCurrentUnitSubmitted) return;
-    if (countdownToWednesday.totalMs > 0 && countdownToWednesday.totalMs <= 24 * 3600000) {
-      maybeDispatchAssignmentBrowserNotification(currentUnit, countdownToWednesday.totalMs);
+    if (!academicContext.isTermBreak && !isCurrentUnitSubmitted) {
+      if (countdownToWednesday.totalMs > 0 && countdownToWednesday.totalMs <= 24 * 3600000) {
+        maybeDispatchAssignmentBrowserNotification(currentUnit, countdownToWednesday.totalMs);
+      }
+    }
+    if (!isRegAcked) {
+      maybeDispatchRegistrationBrowserNotification(registrationContext);
     }
   }, [
     academicContext.isTermBreak,
     countdownToWednesday.totalMs,
     currentUnit,
     isCurrentUnitSubmitted,
+    isRegAcked,
+    registrationContext,
   ]);
 
   const termBreakCountdown = useMemo(() => {
     if (!academicState.countdownTarget) return { days: 0, hours: 0, minutes: 0, seconds: 0 };
-    const targetMs = academicState.countdownTarget.getTime();
-    const diffMs = targetMs - uopeopleDate.getTime();
-
+    const diffMs = academicState.countdownTarget.getTime() - now.getTime();
     if (diffMs <= 0) return { days: 0, hours: 0, minutes: 0, seconds: 0 };
 
     const seconds = Math.floor((diffMs / 1000) % 60);
     const minutes = Math.floor((diffMs / (1000 * 60)) % 60);
     const hours = Math.floor((diffMs / (1000 * 60 * 60)) % 24);
     const days = Math.floor(diffMs / (1000 * 60 * 60 * 24));
-
     return { days, hours, minutes, seconds };
-  }, [academicState.countdownTarget, uopeopleDate]);
+  }, [academicState.countdownTarget, now]);
 
-  // Convert 11:25 PM UoPeople Time (GMT-5) to user's localized device time
+  // Convert 11:55 PM (23:55 GMT-5) strictly into user's device local timezone
   const convertedDeadlines = useMemo(() => {
-    const sampleWedGmt5 = new Date('2026-11-18T23:25:00-05:00');
-    const localWedFormatted = new Intl.DateTimeFormat(undefined, {
+    const formatter = new Intl.DateTimeFormat(undefined, {
       weekday: 'long',
       hour: 'numeric',
       minute: '2-digit',
       hour12: true,
       timeZoneName: 'short',
-    }).format(sampleWedGmt5);
-
-    const sampleSunGmt5 = new Date('2026-11-15T23:25:00-05:00');
-    const localSunFormatted = new Intl.DateTimeFormat(undefined, {
-      weekday: 'long',
-      hour: 'numeric',
-      minute: '2-digit',
-      hour12: true,
-      timeZoneName: 'short',
-    }).format(sampleSunGmt5);
+    });
 
     return {
-      wednesdayLocal: localWedFormatted,
-      sundayLocal: localSunFormatted,
+      wednesdayLocal: formatter.format(nextWedDeadline),
+      sundayLocal: formatter.format(nextSunDeadline),
     };
-  }, []);
+  }, [nextWedDeadline, nextSunDeadline]);
 
   const completionStats = useMemo(() => {
     const total = UOPEOPLE_SCHEDULE.reduce((sum, d) => sum + d.tasks.length, 0);
@@ -480,29 +517,80 @@ export const UoPeopleRhythmCalendar: React.FC = () => {
       return {
         level: '12h' as const,
         message:
-          '🚨 သတိပေးချက်: Assignment Activity တင်ရန် နောက်ဆုံးသတ်မှတ်ချိန် ၁၂ နာရီသာ လိုပါတော့သည်။',
+          '🚨 သတိပြုရန်: Assignment Activity Deadline နီးကပ်နေပါပြီ (၁၂ နာရီသာ လိုပါတော့သည်)',
       };
     }
     if (countdownToWednesday.totalHours <= 24) {
       return {
         level: '24h' as const,
-        message:
-          '📢 သတိပေးချက်: Assignment Activity တင်ရန် ၂၄ နာရီသာ လိုပါတော့သည်။',
+        message: '⏰ Assignment Activity တင်ရန် ၂၄ နာရီသာ လိုပါတော့သည်',
       };
     }
     return null;
   }, [countdownToWednesday.totalHours, countdownToWednesday.totalMs, isCurrentUnitSubmitted]);
 
-  const handleOpenMarkSubmittedModal = () => {
-    void requestDeadlineNotificationPermission();
-    setShowSubmitConfirmModal(true);
+  // Registration alert message (24h, 12h, or Open Day)
+  const activeRegistrationBannerAlert = useMemo(() => {
+    if (isRegAcked) return null;
+    if (registrationContext.isOpenNow) {
+      return {
+        phase: 'open' as const,
+        message:
+          '📢 Course Registration စတင်ဖွင့်လှစ်ပါပြီ။ Portal တွင် ဘာသာရပ်များ စာရင်းသွင်းနိုင်ပါပြီ။',
+      };
+    }
+    if (
+      registrationContext.isUpcoming &&
+      registrationContext.remainingMs > 0 &&
+      registrationContext.remainingMs <= 12 * 3600000
+    ) {
+      return {
+        phase: '12h' as const,
+        message: '🚨 သတိပြုရန်: Course Registration ဖွင့်ရန် ၁၂ နာရီသာ လိုပါတော့သည်။',
+      };
+    }
+    if (
+      registrationContext.isUpcoming &&
+      registrationContext.remainingMs > 12 * 3600000 &&
+      registrationContext.remainingMs <= 24 * 3600000
+    ) {
+      return {
+        phase: '24h' as const,
+        message:
+          '⏰ Course Registration ဖွင့်ရန် ၂၄ နာရီသာ လိုပါတော့သည်။ Portal တွင် မိမိ စတင်ချိန်ကို စစ်ဆေးထားပါ။',
+      };
+    }
+    return null;
+  }, [isRegAcked, registrationContext]);
+
+  const handleEnableOsNotifications = async () => {
+    const perm = await requestDeadlineNotificationPermission();
+    setNotificationPermission(perm);
   };
 
-  const handleConfirmMarkSubmitted = () => {
+  // Inline 2-Step Mark as Submitted Handler
+  const handleAssignmentActionClick = () => {
+    void handleEnableOsNotifications();
+    if (!isConfirmingAssignment) {
+      setIsConfirmingAssignment(true);
+      return;
+    }
     const storageKey = getAssignmentSubmittedKey(currentUnit);
     confirmDeadlineSubmission(storageKey, currentUnit);
     setIsCurrentUnitSubmitted(true);
-    setShowSubmitConfirmModal(false);
+    setIsConfirmingAssignment(false);
+  };
+
+  // Inline 2-Step Registration Acknowledgment Handler
+  const handleRegistrationAckClick = () => {
+    void handleEnableOsNotifications();
+    if (!isConfirmingRegistration) {
+      setIsConfirmingRegistration(true);
+      return;
+    }
+    confirmRegistrationAcknowledgment(registrationContext.targetTermKey);
+    setIsRegAcked(true);
+    setIsConfirmingRegistration(false);
   };
 
   return (
@@ -516,7 +604,10 @@ export const UoPeopleRhythmCalendar: React.FC = () => {
             setCurrentUnit(parseInt(match[0], 10));
           }
         }}
-        onExportIcs={() => setShowIcsModal(true)}
+        onExportIcs={() => {
+          void handleEnableOsNotifications();
+          setShowIcsModal(true);
+        }}
         termStartDate="2026-11-12"
       />
 
@@ -529,7 +620,7 @@ export const UoPeopleRhythmCalendar: React.FC = () => {
         </div>
       )}
 
-      {/* TOP ASSIGNMENT ACTIVITY DEADLINE BANNER (11:25 PM UoPeople Time / GMT-5 + 2-Step Mark as Submitted) */}
+      {/* TOP ASSIGNMENT ACTIVITY DEADLINE BANNER (11:55 PM / 23:55 GMT-5 + Inline 2-Step Mark as Submitted) */}
       <div
         className={`p-5 rounded-2xl border shadow-xl transition-all duration-300 ${
           isCurrentUnitSubmitted
@@ -556,11 +647,21 @@ export const UoPeopleRhythmCalendar: React.FC = () => {
                   : `Unit ${currentUnit} Assignment Activity Deadline`}
               </span>
               <span className="text-xs font-mono font-bold text-indigo-300 bg-slate-950/80 px-2.5 py-0.5 rounded-full border border-indigo-500/30">
-                Wednesday 11:25 PM UoPeople Time (GMT-5)
+                Wednesday 11:55 PM (23:55 GMT-5)
               </span>
               <span className="text-xs font-mono text-emerald-300 bg-slate-950/80 px-2.5 py-0.5 rounded-full border border-emerald-500/30">
                 Local ({localTimezone}): {convertedDeadlines.wednesdayLocal}
               </span>
+              {notificationPermission === 'default' && (
+                <button
+                  type="button"
+                  onClick={() => void handleEnableOsNotifications()}
+                  className="text-[11px] px-2.5 py-0.5 rounded-full bg-indigo-600/25 hover:bg-indigo-600/40 text-indigo-200 border border-indigo-400/40 flex items-center space-x-1 transition-colors cursor-pointer"
+                >
+                  <Bell className="w-3 h-3" />
+                  <span>Enable OS Push Alerts</span>
+                </button>
+              )}
             </div>
 
             {/* Active 24h / 12h Alert Notice if within 24h/12h and unsubmitted */}
@@ -576,13 +677,13 @@ export const UoPeopleRhythmCalendar: React.FC = () => {
               </div>
             )}
 
-            {/* Sub-notice inside the Assignment Activity Deadline Banner */}
+            {/* Sub-notice inside the Assignment Deadline Card */}
             <div className="p-3 rounded-xl bg-slate-950/80 border border-amber-500/30 text-xs text-amber-200/95 leading-relaxed">
-              ⚠️ သတိပြုရန်: ပုံမှန်အားဖြင့် ဗုဒ္ဓဟူးနေ့ည ၁၁:၂၅ နာရီ (UoPeople Time) ဖြစ်သော်လည်း အချို့ Course များတွင် Instructor က ကြာသပတေးနေ့ည ၁၁:၂၅ သို့မဟုတ် ၁၁:၅၅ အထိ သတ်မှတ်ပေးထားတတ်သဖြင့် မိမိ Course Moodle တွင် အတည်ပြုစစ်ဆေးပါ။
+              {THURSDAY_EXTENSION_NOTICE_MY}
             </div>
           </div>
 
-          {/* Right Side: Live Countdown & 2-Step Mark as Submitted Action */}
+          {/* Right Side: Live Countdown & Inline 2-Step Mark as Submitted Button */}
           <div className="flex flex-col sm:flex-row lg:flex-col items-stretch sm:items-center lg:items-end justify-between gap-3 shrink-0">
             {!isCurrentUnitSubmitted && (
               <div className="flex items-center space-x-1.5 bg-slate-950/90 border border-slate-800 px-3 py-1.5 rounded-xl font-mono text-xs">
@@ -598,21 +699,81 @@ export const UoPeopleRhythmCalendar: React.FC = () => {
             {isCurrentUnitSubmitted ? (
               <div className="flex items-center space-x-2 px-4 py-2.5 rounded-xl bg-emerald-500/20 border border-emerald-500/40 text-emerald-300 text-xs font-extrabold shadow-sm">
                 <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />
-                <span>✅ တင်သွင်းပြီးပါပြီ (Week {currentUnit})</span>
+                <span>✅ တင်သွင်းပြီးပါပြီ (Unit {currentUnit})</span>
               </div>
             ) : (
               <button
                 type="button"
-                onClick={handleOpenMarkSubmittedModal}
-                className="flex items-center justify-center space-x-2 px-4 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold shadow-lg shadow-emerald-600/25 transition-all cursor-pointer"
+                onClick={handleAssignmentActionClick}
+                className={`flex items-center justify-center space-x-2 px-4 py-2.5 rounded-xl text-white text-xs font-bold shadow-lg transition-all cursor-pointer ${
+                  isConfirmingAssignment
+                    ? 'bg-gradient-to-r from-amber-600 to-rose-600 hover:from-amber-500 hover:to-rose-500 shadow-rose-600/30 ring-2 ring-amber-400/50'
+                    : 'bg-emerald-600 hover:bg-emerald-500 shadow-emerald-600/25'
+                }`}
               >
                 <CheckCircle2 className="w-4 h-4 shrink-0" />
-                <span>တင်ပြီးပါပြီ (Mark as Submitted)</span>
+                <span>
+                  {isConfirmingAssignment
+                    ? 'သေချာပါသလား? အတည်ပြုမည်'
+                    : 'စာတင်ပြီးပါပြီ (Mark as Submitted)'}
+                </span>
               </button>
             )}
           </div>
         </div>
       </div>
+
+      {/* COURSE REGISTRATION PERIOD COUNTDOWN, CLARIFICATION & 2-STEP ACKNOWLEDGMENT BANNER */}
+      {!isRegAcked && (
+        <div className="p-4 sm:p-5 rounded-2xl bg-gradient-to-r from-slate-900 via-blue-950/35 to-slate-900 border border-blue-500/35 shadow-lg space-y-3">
+          <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-3">
+            <div className="space-y-1.5 flex-1">
+              <div className="flex flex-wrap items-center gap-2">
+                <span className="px-2.5 py-0.5 rounded-full text-[11px] font-bold bg-blue-500/20 text-blue-300 border border-blue-500/40">
+                  📋 {registrationContext.targetTermName} Registration
+                </span>
+                <span className="text-xs sm:text-sm font-bold text-white">
+                  {activeRegistrationBannerAlert
+                    ? activeRegistrationBannerAlert.message
+                    : `⏳ Course Registration ဖွင့်ရန် ${registrationContext.remainingDays} ရက် ${registrationContext.remainingHours} နာရီ ကျန်ရှိပါသည်`}
+                </span>
+              </div>
+
+              <p className="text-xs text-slate-300 leading-relaxed">
+                ℹ️ Course Registration ကာလ စတင်ချိန်သည် ကျောင်းသားတစ်ယောက်ချင်းစီအလိုက် ကွဲပြားနိုင်သဖြင့် မိမိ၏ သတ်မှတ်ချိန် အတိအကျကို{' '}
+                <a
+                  href="https://portal.uopeople.edu/login"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="text-indigo-300 underline hover:text-indigo-200 font-semibold"
+                >
+                  Student Portal (https://portal.uopeople.edu/login)
+                </a>{' '}
+                တွင် ဝင်ရောက်စစ်ဆေးပါ။
+              </p>
+            </div>
+
+            <div className="shrink-0 flex items-center">
+              <button
+                type="button"
+                onClick={handleRegistrationAckClick}
+                className={`flex items-center space-x-2 px-4 py-2.5 rounded-xl text-xs font-bold shadow-lg transition-all cursor-pointer ${
+                  isConfirmingRegistration
+                    ? 'bg-gradient-to-r from-amber-600 to-rose-600 hover:from-amber-500 hover:to-rose-500 text-white shadow-rose-600/30 ring-2 ring-amber-400/50'
+                    : 'bg-indigo-600 hover:bg-indigo-500 text-white shadow-indigo-600/25'
+                }`}
+              >
+                <CheckCircle2 className="w-4 h-4 shrink-0" />
+                <span>
+                  {isConfirmingRegistration
+                    ? 'အတည်ပြုပါသလား?'
+                    : 'သိပြီးပါပြီ / စာရင်းသွင်းပြီးပါပြီ'}
+                </span>
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Dual Timezone Clocks & Live Countdown / Term Break Panel */}
       <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
@@ -624,16 +785,9 @@ export const UoPeopleRhythmCalendar: React.FC = () => {
               <span>UoPeople Official Time (GMT-5)</span>
             </div>
             <div className="text-2xl font-mono font-extrabold text-white">
-              {uopeopleDate.toLocaleTimeString('en-US', { hour12: true })}
+              {uopeopleWallClock.timeLabel}
             </div>
-            <div className="text-[11px] text-slate-400">
-              {uopeopleDate.toLocaleDateString('en-US', {
-                weekday: 'short',
-                month: 'short',
-                day: 'numeric',
-                year: 'numeric',
-              })}
-            </div>
+            <div className="text-[11px] text-slate-400">{uopeopleWallClock.dateLabel}</div>
           </div>
           <div className="text-right">
             <span className="text-[10px] px-2 py-0.5 rounded-full bg-indigo-500/10 text-indigo-300 border border-indigo-500/30 font-semibold font-mono">
@@ -673,7 +827,7 @@ export const UoPeopleRhythmCalendar: React.FC = () => {
           </div>
         </div>
 
-        {/* Conditional Card: Term Break Countdown OR Active Wednesday 11:25 PM Countdown */}
+        {/* Conditional Card: Term Break Countdown OR Active Wednesday 11:55 PM Countdown */}
         {isTermBreak ? (
           <div className="p-4 rounded-2xl bg-gradient-to-br from-slate-900 to-amber-950/50 border border-amber-500/50 flex flex-col justify-between">
             <div className="flex items-center justify-between">
@@ -729,9 +883,7 @@ export const UoPeopleRhythmCalendar: React.FC = () => {
                     : 'Wednesday Submission Countdown'}
                 </span>
               </span>
-              <span className="text-[10px] text-slate-300 font-mono">
-                11:25 PM UoPeople Time (GMT-5)
-              </span>
+              <span className="text-[10px] text-slate-300 font-mono">11:55 PM (23:55 GMT-5)</span>
             </div>
 
             <div className="grid grid-cols-4 gap-1.5 text-center my-1.5">
@@ -848,9 +1000,9 @@ export const UoPeopleRhythmCalendar: React.FC = () => {
                 <strong className="text-white">UoPeople Two Golden Deadlines:</strong>
                 <span className="ml-2 text-slate-400">
                   (1) Discussion Post due{' '}
-                  <strong>Sunday 11:25 PM UoPeople Time (GMT-5)</strong> (
+                  <strong>Sunday 11:55 PM (23:55 GMT-5)</strong> (
                   {convertedDeadlines.sundayLocal}) · (2) Final Assignments due{' '}
-                  <strong>Wednesday 11:25 PM UoPeople Time (GMT-5)</strong> (
+                  <strong>Wednesday 11:55 PM (23:55 GMT-5)</strong> (
                   {convertedDeadlines.wednesdayLocal}).
                 </span>
               </div>
@@ -985,64 +1137,25 @@ export const UoPeopleRhythmCalendar: React.FC = () => {
               })}
             </div>
           </div>
-
-          {/* DISCUSSION INFORMATIONAL NOTE BANNER (Display Beneath Calendar) */}
-          <div className="p-5 rounded-2xl bg-gradient-to-r from-indigo-950/50 via-slate-900 to-blue-950/40 border border-indigo-500/35 shadow-lg">
-            <div className="flex items-start space-x-3">
-              <div className="p-2 rounded-xl bg-indigo-500/20 text-indigo-300 border border-indigo-500/30 shrink-0 mt-0.5">
-                <Lightbulb className="w-5 h-5 text-amber-300" />
-              </div>
-              <p className="text-xs sm:text-sm text-slate-200 leading-relaxed">
-                💡 Discussion အမှတ်ပေးပုံ သတိပြုရန်: Discussion တစ်ခုစီရဲ့ အမှတ်ကိုသိချင်ရင် Syllabus ထဲက စုစုပေါင်းအမှတ်ကို Discussion ရှိတဲ့ အပတ်အရေအတွက်နဲ့ စားလိုက်ပါ။ Sunday မှာ Initial post မတင်မိလို့ အမှတ်တစ်ဝက် ဖြတ်ချတာမျိုး မရှိပါဘူး (.1 သို့မဟုတ် .2 လောက်ပဲ လျော့တတ်ပြီး ကျန်တာက Rubric မပြည့်စုံလို့ ဖြတ်တာပါ)။ ဘယ်သူမှ Discussion မှာ အမှတ်ပြည့်ရလေ့မရှိသလို Instructor အပေါ်ပဲ မူတည်တာမို့ Sunday ကျော်သွားလည်း စိတ်မပူဘဲ Rubric အတိုင်း အကောင်းဆုံးရေးပြီး Monday လောက် အပြီးတင်ပေးပါ။
-              </p>
-            </div>
-          </div>
         </>
       )}
 
-      {/* TWO-STEP "MARK AS SUBMITTED" CONFIRMATION MODAL */}
-      {showSubmitConfirmModal && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/85 backdrop-blur-md animate-in fade-in duration-200">
-          <div className="bg-slate-900 border border-emerald-500/40 rounded-3xl p-6 sm:p-7 max-w-md w-full shadow-2xl relative space-y-4">
-            <div className="w-12 h-12 rounded-2xl bg-emerald-500/15 text-emerald-400 border border-emerald-500/30 flex items-center justify-center">
-              <CheckCircle2 className="w-6 h-6" />
+      {/* DISCUSSION RATING GUIDANCE CARD (Directly below Academic Calendar Rhythm component) */}
+      <div className="p-5 rounded-2xl bg-gradient-to-r from-indigo-950/50 via-slate-900 to-blue-950/40 border border-indigo-500/35 shadow-lg">
+        <div className="flex items-start space-x-3">
+          <div className="p-2 rounded-xl bg-indigo-500/20 text-indigo-300 border border-indigo-500/30 shrink-0 mt-0.5">
+            <Lightbulb className="w-5 h-5 text-amber-300" />
+          </div>
+          <div className="space-y-1.5 text-xs sm:text-sm text-slate-200 leading-relaxed">
+            <div className="font-bold text-amber-200">
+              💡 Discussion အမှတ်ပေးပုံ သတိပြုရန်:
             </div>
-
-            <h3 className="text-base sm:text-lg font-bold text-white">
-              သေချာပါသလား? တင်ပြီးကြောင်း အတည်ပြုပါသလား။
-            </h3>
-
-            <p className="text-xs sm:text-sm text-slate-300 leading-relaxed">
-              Unit {currentUnit} ၏ Assignment Activity ကို Moodle တွင် အောင်မြင်စွာ တင်သွင်းပြီးကြောင်း အတည်ပြုပါသလား။
+            <p>
+              Discussion တစ်ခုချင်းစီ ဘယ်နှမှတ်ရမလဲဆိုတာ Syllabus မှာ စုစုပေါင်းအမှတ်ကို Discussion အပတ်အရေအတွက်နဲ့ စားပြီး တွက်ကြည့်နိုင်ပါတယ်။ Initial post ကို Sunday မှာ မတင်မိလို့ အမှတ်တစ်ဝက် ဖြတ်ချတာမျိုး မရှိပါဘူး (.1, .2 လောက်ပဲ လျော့နိုင်ပြီး ကျန်တာက Rubric မှာပြထားတဲ့ သတ်မှတ်ချက် မပြည့်ရင် instructor က အမှတ်လျှော့တတ်လို့ပါ)။ ဘယ်သူမဆို Discussion မှာ အမှတ်ပြည့်ရတာမျိုး နည်းပြီး အမှတ်ပေးတာက Instructor အပေါ်ပဲ မူတည်တာမို့ deadline မှာ မတင်မိလည်း စိတ်မပူဘဲ Rubric အတိုင်း အကောင်းဆုံး ရေးသားတင်သွင်းပါ။ နောက်အကျဆုံး Monday လောက် တင်နိုင်အောင် လုပ်ပါ။
             </p>
-
-            <div className="p-3 rounded-xl bg-slate-950 border border-slate-800 text-xs text-amber-300 flex items-start space-x-2">
-              <HelpCircle className="w-4 h-4 text-amber-400 shrink-0 mt-0.5" />
-              <span>
-                အတည်ပြုပြီးပါက ဤအပတ်အတွက် ၂၄ နာရီ နှင့် ၁၂ နာရီ သတိပေးချက် notification များ အားလုံးကို အပြီးတိုင် ပိတ်သိမ်းပေးသွားပါမည်။
-              </span>
-            </div>
-
-            <div className="flex justify-end space-x-3 pt-2">
-              <button
-                type="button"
-                onClick={() => setShowSubmitConfirmModal(false)}
-                className="px-4 py-2 rounded-xl text-xs sm:text-sm font-semibold bg-slate-800 text-slate-300 hover:bg-slate-700 transition-colors cursor-pointer"
-              >
-                မတင်ရသေးပါ (Cancel)
-              </button>
-              <button
-                type="button"
-                onClick={handleConfirmMarkSubmitted}
-                className="px-4 py-2 rounded-xl text-xs sm:text-sm font-bold bg-emerald-600 text-white hover:bg-emerald-500 shadow-lg shadow-emerald-600/30 flex items-center space-x-1.5 transition-all cursor-pointer"
-              >
-                <CheckCircle2 className="w-4 h-4" />
-                <span>အတည်ပြုပါသည် (Confirm)</span>
-              </button>
-            </div>
           </div>
         </div>
-      )}
+      </div>
 
       {/* RFC 5545 EXPORT MODAL */}
       {showIcsModal && (
@@ -1069,7 +1182,7 @@ export const UoPeopleRhythmCalendar: React.FC = () => {
                 <p className="text-xs text-slate-400">
                   {language === 'my'
                     ? `သင်၏ စက်ပစ္စည်း စံတော်ချိန် (${localTimezone}) ဖြင့် အလိုအလျောက် ချိန်ညှိထားသော ပြက္ခဒိန်`
-                    : `Auto-configured for your device timezone (${localTimezone}) with 24h & 12h dual VALARMs.`}
+                    : `UTC Z-formatted events auto-mapped to your device timezone (${localTimezone}) with 24h & 12h VALARMs.`}
                 </p>
               </div>
             </div>
@@ -1098,18 +1211,18 @@ export const UoPeopleRhythmCalendar: React.FC = () => {
               </div>
             </div>
 
-            {/* Included Milestones Overview */}
+            {/* Clarification Notice inside Modal */}
             <div className="p-3.5 rounded-2xl bg-slate-950 border border-slate-800 text-[11px] text-slate-300 space-y-1.5">
               <div className="font-bold text-indigo-300">
-                ပါဝင်သော အဓိက ရက်စွဲများနှင့် သတိပေးချက်များ (Dual VALARM: -P1D &amp; -PT12H):
+                ပါဝင်သော အဓိက ရက်စွဲများနှင့် Embedded VALARM များ (-P1D &amp; -PT12H):
               </div>
               <ul className="list-disc list-inside space-y-1 text-slate-400">
-                <li>Registration Period &amp; Late Registration Period</li>
+                <li>UoPeople Course Registration Period Starts &amp; Late Registration</li>
                 <li>Drop Period (End of Week 1) &amp; Course Withdrawal Period (End of Week 4)</li>
-                <li>Weekly Deadlines (11:25 PM UoPeople Time / GMT-5) &amp; Final Exam Window</li>
+                <li>Weekly Deadlines (11:55 PM / 23:55 GMT-5) &amp; Final Exam Window</li>
               </ul>
-              <p className="text-[11px] text-amber-300/90 pt-1">
-                ℹ️ Registration Period ရက်စွဲသည် ကျောင်းသားတစ်ဦးချင်းစီအလိုက် ကွဲပြားနိုင်သဖြင့် Student Portal (https://portal.uopeople.edu/login) တွင် အတည်ပြုပါ
+              <p className="text-[11px] text-amber-300/90 pt-1 leading-relaxed">
+                {REGISTRATION_CLARIFICATION_NOTICE_MY}
               </p>
             </div>
 
@@ -1148,7 +1261,7 @@ export const UoPeopleRhythmCalendar: React.FC = () => {
                 <span>အသုံးပြုနည်း အမြန်လမ်းညွှန် (Quick Guide):</span>
               </div>
               <p className="text-[11px] text-indigo-100/90 leading-relaxed font-sans">
-                ဖိုင်ကို Download ဆွဲပြီး ဖုန်း/ကွန်ပျူတာထဲတွင် ဖွင့်လိုက်ပါက Google Calendar သို့မဟုတ် Apple Calendar ထဲသို့ အလိုအလျောက် ထည့်သွင်းပေးသွားမည်ဖြစ်ပြီး ၂၄ နာရီ နှင့် ၁၂ နာရီ ကြိုတင်အသိပေး Alarm များ (VALARM) ပါဝင်ပြီးသား ဖြစ်ပါသည်။
+                ဖိုင်ကို Download ဆွဲပြီး ဖုန်း/ကွန်ပျူတာထဲတွင် ဖွင့်လိုက်ပါက Google Calendar, Apple Calendar သို့မဟုတ် Outlook ထဲသို့ UTC Z စနစ်ဖြင့် သင်၏ ဒေသစံတော်ချိန်အတိုင်း အလိုအလျောက် ထည့်သွင်းပေးသွားမည်ဖြစ်ပြီး ၂၄ နာရီ (-P1D) နှင့် ၁၂ နာရီ (-PT12H) ကြိုတင်အသိပေး Alarm များ (VALARM) ပါဝင်ပြီးသား ဖြစ်ပါသည်။
               </p>
             </div>
           </div>
